@@ -68,5 +68,3 @@ The hardest long-term problem: encoding research taste. Which problems are worth
 ## The Target Output
 
 A system that enables a domain expert to go from a well-specified research question to a publication-quality result — with genuine novelty, verified correctness, and full auditability of every step — in days rather than months.
-
-Not AI slop. Not a replication. Real work.
