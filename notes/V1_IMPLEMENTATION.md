@@ -14,15 +14,67 @@ Do not add components until the prior component works. Each phase has a concrete
 
 ```
 Python 3.11+
-Anthropic SDK (Claude — Haiku for supervisor, Sonnet for execution/verification)
-OpenAI SDK (GPT-4o — for cross-provider verification on foundational results)
+Anthropic SDK (Claude — target production stack)
+OpenAI SDK (GPT-4o — cross-provider verification, and compatible with open-source endpoints)
+Ollama or Together AI SDK (open-source models — early development and iteration)
 Plain markdown files (file tree — no database, no vector store)
 pytest (oracle test suite)
 ```
 
 No frameworks. No LangChain. No AutoGen. Direct API calls with explicit prompts. You need to see exactly what's happening at every step.
 
+All model calls are routed through `core/router.py`. No other file imports an SDK client directly. This is what makes the model progression possible — swap the tier in one place and the rest of the system doesn't change.
+
 Cost target: under $50 total for building and testing v1 including all iteration.
+
+---
+
+## Model Progression Strategy
+
+The system is built in tiers. Start cheap. Validate the architecture works. Upgrade models only when the logic is proven.
+
+### Tier 0 — Free / Local (Phases 1–3, development)
+Use for: getting the pipeline wiring correct, prompt iteration, supervisor heuristic tuning. Output quality doesn't matter yet — you're testing structure, not science.
+
+| Role | Model | Provider | Cost |
+|------|-------|----------|------|
+| Supervisor | Llama 3.1 8B | Ollama (local) | $0 |
+| Executor | Llama 3.1 8B or 70B | Ollama (local) | $0 |
+| Verifier | Llama 3.1 8B | Ollama (local) | $0 |
+| Cross-check | Mistral 7B | Ollama (local) | $0 |
+
+Ollama runs models locally with an OpenAI-compatible API endpoint (`http://localhost:11434/v1`). Router points there; no code changes elsewhere.
+
+### Tier 1 — Cheap Cloud (Phase 4–5, integration testing)
+Use for: first real research runs, checking whether the pipeline produces coherent multi-stage outputs. Still not production quality — finding where the system breaks.
+
+| Role | Model | Provider | Est. cost/run |
+|------|-------|----------|---------------|
+| Supervisor | Gemini Flash 2.0 | Google AI | ~$0.01 |
+| Executor | Gemini Flash 2.0 or Llama 3.3 70B | Together AI | ~$0.50–1.00 |
+| Verifier | Gemini Flash 2.0 | Google AI | ~$0.50 |
+| Cross-check | Llama 3.3 70B | Together AI | ~$0.20 |
+
+Together AI and Google AI both expose OpenAI-compatible endpoints. Router swaps the base URL and model string; calling code is unchanged.
+
+### Tier 2 — Production (Phase 6+, real research runs)
+Use for: actual paper runs. Models capable enough to produce outputs worth verifying.
+
+| Role | Model | Provider | Est. cost/run |
+|------|-------|----------|---------------|
+| Supervisor | claude-haiku-4-5 | Anthropic | ~$0.05 |
+| Executor | claude-sonnet-4-6 | Anthropic | ~$2–4/stage |
+| Verifier (primary) | claude-sonnet-4-6 | Anthropic | ~$2–4/stage |
+| Cross-check (foundational only) | gpt-4o | OpenAI | ~$1–2/stage |
+
+### Upgrade criteria
+Don't upgrade a tier until:
+- The pipeline runs end-to-end without errors on that tier
+- The supervisor catches at least one real failure per stage
+- Stage gate correctly blocks on bad outputs and passes clean ones
+- You have a baseline output to compare against after upgrading
+
+Document what breaks when you upgrade — that's signal about what the system was hiding.
 
 ---
 
@@ -31,13 +83,13 @@ Cost target: under $50 total for building and testing v1 including all iteration
 ```
 orchestrate/
   core/
+    router.py              # ALL model calls go through here — single source of truth
     decomposer.py
     executor.py
     supervisor.py
     verifier.py
     convention_manager.py
     state_manager.py
-    router.py              # model selection logic
   prompts/
     decomposer_system.md
     executor_system.md
@@ -45,15 +97,18 @@ orchestrate/
     supervisor_system.md
     constraints.md         # anti-hallucination rules, baked into executor
   oracle/
-    genomics/
-      benchmark_checks.py
-      calibration_checks.py
-      enrichment_checks.py
+    astro/
+      physical_checks.py     # constants, dimensional bounds, SB law, distance modulus
+      catalog_checks.py      # benchmark star/galaxy recovery
+      statistical_checks.py  # uncertainty, chi2, S/N, redshift-distance
+      spectral_checks.py     # line identification, redshift consistency, line ratios
+      photometry_checks.py   # flux conservation, color bounds, magnitude systems
+      run_oracle.py          # entry point: aggregate and report
   tests/
     test_decomposer.py
     test_supervisor_heuristics.py
     test_verifier.py
-    test_oracle.py
+    test_oracle.py           # astro oracle checks
   projects/               # runtime — gitignored
     {project_id}/
       master_plan.md
@@ -82,16 +137,21 @@ git init orchestrate
 cd orchestrate
 python -m venv venv
 source venv/bin/activate
-pip install anthropic openai pytest python-dotenv
+pip install anthropic openai pytest python-dotenv requests
+# For Tier 0 local models:
+# Install Ollama from https://ollama.com, then: ollama pull llama3.1
 ```
 
 `.env`:
 ```
-ANTHROPIC_API_KEY=your_key
-OPENAI_API_KEY=your_key
+ANTHROPIC_API_KEY=your_key       # Tier 2
+OPENAI_API_KEY=your_key          # Tier 2 cross-check
+TOGETHER_API_KEY=your_key        # Tier 1
+GOOGLE_AI_API_KEY=your_key       # Tier 1
+# Tier 0 (Ollama) needs no key — runs locally
 ```
 
-`config.py`:
+`config.py` — environment flags only, no model strings (those live in `router.py`):
 ```python
 import os
 from dotenv import load_dotenv
@@ -99,20 +159,180 @@ load_dotenv()
 
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+TOGETHER_KEY = os.getenv("TOGETHER_API_KEY")
+GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_API_KEY")
 
-# Model routing
-SUPERVISOR_MODEL = "claude-haiku-4-5-20251001"
-EXECUTOR_MODEL = "claude-sonnet-4-6"
-VERIFIER_MODEL_PRIMARY = "claude-sonnet-4-6"
-VERIFIER_MODEL_CROSS = "gpt-4o"  # for foundational results only
+# Active tier: 0 = local/Ollama, 1 = cheap cloud, 2 = production
+MODEL_TIER = int(os.getenv("MODEL_TIER", "0"))
 
-# Cost controls
+# Cost controls (apply at all tiers)
 MAX_TOKENS_EXECUTOR = 4000
 MAX_TOKENS_VERIFIER = 2000
 MAX_TOKENS_SUPERVISOR = 1000
 ```
 
-**Phase 0 pass criteria:** API calls work, environment loads cleanly.
+---
+
+## `core/router.py` — Single Model Management File
+
+This is the only file that knows which models exist, which tier they belong to, and how to call them. All other modules call `router.call()` — they never import an SDK client directly.
+
+To change tiers: set `MODEL_TIER` in `.env`. To swap a specific model: edit one entry in the `TIERS` dict. Nothing else changes.
+
+```python
+import os
+import anthropic
+import openai
+import config
+
+# ─────────────────────────────────────────────
+# TIER DEFINITIONS — edit model strings here only
+# ─────────────────────────────────────────────
+
+TIERS = {
+    0: {
+        # Ollama local — OpenAI-compatible endpoint, no key needed
+        "supervisor":   {"provider": "ollama", "model": "llama3.1:8b"},
+        "executor":     {"provider": "ollama", "model": "llama3.1:8b"},
+        "verifier":     {"provider": "ollama", "model": "llama3.1:8b"},
+        "cross_check":  {"provider": "ollama", "model": "mistral:7b"},
+        "decomposer":   {"provider": "ollama", "model": "llama3.1:8b"},
+    },
+    1: {
+        # Cheap cloud — Together AI (OpenAI-compatible) + Google AI
+        "supervisor":   {"provider": "together", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
+        "executor":     {"provider": "together", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
+        "verifier":     {"provider": "together", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
+        "cross_check":  {"provider": "together", "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"},
+        "decomposer":   {"provider": "together", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
+    },
+    2: {
+        # Production — Anthropic + OpenAI
+        "supervisor":   {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+        "executor":     {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+        "verifier":     {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+        "cross_check":  {"provider": "openai",    "model": "gpt-4o"},
+        "decomposer":   {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+    },
+}
+
+# ─────────────────────────────────────────────
+# PROVIDER CLIENTS
+# ─────────────────────────────────────────────
+
+def _get_client(provider: str):
+    if provider == "anthropic":
+        return anthropic.Anthropic(api_key=config.ANTHROPIC_KEY)
+    elif provider == "openai":
+        return openai.OpenAI(api_key=config.OPENAI_KEY)
+    elif provider == "together":
+        return openai.OpenAI(
+            api_key=config.TOGETHER_KEY,
+            base_url="https://api.together.xyz/v1"
+        )
+    elif provider == "ollama":
+        return openai.OpenAI(
+            api_key="ollama",
+            base_url="http://localhost:11434/v1"
+        )
+    else:
+        raise ValueError(f"Unknown provider: {provider}")
+
+# ─────────────────────────────────────────────
+# UNIFIED CALL INTERFACE
+# ─────────────────────────────────────────────
+
+def call(
+    role: str,
+    system: str,
+    user: str,
+    max_tokens: int = None,
+    tier: int = None
+) -> str:
+    """
+    Single entry point for all model calls.
+
+    role: one of 'supervisor', 'executor', 'verifier', 'cross_check', 'decomposer'
+    system: system prompt string
+    user: user message string
+    max_tokens: override default if needed
+    tier: override config.MODEL_TIER if needed (useful for tests)
+    
+    Returns: response text as string.
+    Raises: RuntimeError with context on API failure.
+    """
+    active_tier = tier if tier is not None else config.MODEL_TIER
+    spec = TIERS[active_tier][role]
+    provider = spec["provider"]
+    model = spec["model"]
+
+    # Default max_tokens by role
+    if max_tokens is None:
+        max_tokens = {
+            "supervisor":  config.MAX_TOKENS_SUPERVISOR,
+            "executor":    config.MAX_TOKENS_EXECUTOR,
+            "verifier":    config.MAX_TOKENS_VERIFIER,
+            "cross_check": config.MAX_TOKENS_VERIFIER,
+            "decomposer":  config.MAX_TOKENS_EXECUTOR,
+        }.get(role, 2000)
+
+    try:
+        if provider == "anthropic":
+            client = _get_client("anthropic")
+            response = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}]
+            )
+            return response.content[0].text
+
+        else:
+            # OpenAI-compatible: Together, Ollama, OpenAI
+            client = _get_client(provider)
+            response = client.chat.completions.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user}
+                ]
+            )
+            return response.choices[0].message.content
+
+    except Exception as e:
+        raise RuntimeError(
+            f"router.call failed: role={role}, provider={provider}, "
+            f"model={model}, tier={active_tier}\nOriginal error: {e}"
+        ) from e
+
+
+def current_tier_summary() -> str:
+    """Print active model assignments. Call at project init for audit trail."""
+    tier = config.MODEL_TIER
+    lines = [f"Active tier: {tier}"]
+    for role, spec in TIERS[tier].items():
+        lines.append(f"  {role:12s} → {spec['provider']:10s} / {spec['model']}")
+    return "\n".join(lines)
+```
+
+All other modules now use router instead of direct SDK calls. The calling pattern is identical everywhere:
+
+```python
+# In decomposer.py, executor.py, verifier.py — all look like this now:
+from core import router
+
+output = router.call(
+    role="executor",
+    system=SYSTEM_PROMPT,
+    user=user_content,
+    max_tokens=config.MAX_TOKENS_EXECUTOR
+)
+```
+
+No module ever imports `anthropic` or `openai` directly. No model string appears outside `router.py`.
+
+**Phase 0 pass criteria:** `MODEL_TIER=0 pytest tests/test_router.py` passes — router can call all five roles through Ollama. `python -c "from core.router import current_tier_summary; print(current_tier_summary())"` prints cleanly.
 
 ---
 
@@ -150,36 +370,26 @@ Output format: markdown with a YAML frontmatter block per task, then a dependenc
 
 `core/decomposer.py`:
 ```python
-import anthropic
 from pathlib import Path
+from core import router
 import config
-
-client = anthropic.Anthropic(api_key=config.ANTHROPIC_KEY)
 
 SYSTEM_PROMPT = Path("prompts/decomposer_system.md").read_text()
 
 def decompose(research_goal: str, domain_context: str) -> str:
     """Generate task tree for a research goal."""
-    response = client.messages.create(
-        model=config.EXECUTOR_MODEL,  # Sonnet for decomposition
-        max_tokens=4000,
+    return router.call(
+        role="decomposer",
         system=SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": f"Domain context:\n{domain_context}\n\nResearch goal:\n{research_goal}"
-        }]
+        user=f"Domain context:\n{domain_context}\n\nResearch goal:\n{research_goal}"
     )
-    return response.content[0].text
 
 def adversarial_review(task_tree: str, research_goal: str) -> str:
     """
     Second model call reviews the decomposition.
     Looks for: missing subtasks, wrong dependencies, under-specified verification criteria.
     """
-    response = client.messages.create(
-        model=config.EXECUTOR_MODEL,
-        max_tokens=2000,
-        system="""You are reviewing a research task decomposition for completeness and correctness.
+    system = """You are reviewing a research task decomposition for completeness and correctness.
         
 Check for:
 1. Missing subtasks (steps that will clearly be needed but aren't listed)
@@ -188,14 +398,13 @@ Check for:
 4. Tasks marked STANDARD that should be HIGH complexity
 5. Foundational results not flagged as such
 
-Output: structured list of issues found. If none, say DECOMPOSITION APPROVED with brief justification.""",
-        messages=[{
-            "role": "user", 
-            "content": f"Research goal: {research_goal}\n\nProposed task tree:\n{task_tree}"
-        }]
+Output: structured list of issues found. If none, say DECOMPOSITION APPROVED with brief justification."""
+
+    return router.call(
+        role="decomposer",
+        system=system,
+        user=f"Research goal: {research_goal}\n\nProposed task tree:\n{task_tree}"
     )
-    return response.content[0].text
-```
 
 ### 1.3 Test
 
@@ -293,11 +502,9 @@ Format: structured markdown, equations in LaTeX.
 
 `core/executor.py`:
 ```python
-import anthropic
 from pathlib import Path
+from core import router
 import config
-
-client = anthropic.Anthropic(api_key=config.ANTHROPIC_KEY)
 
 SYSTEM_PROMPT = (
     Path("prompts/executor_system.md").read_text() + 
@@ -318,7 +525,6 @@ def load_prior_outputs(project_path: Path, dependency_ids: list[str]) -> str:
 def execute_task(
     task_spec: dict,
     project_path: Path,
-    use_extended_thinking: bool = False
 ) -> str:
     prior = load_prior_outputs(project_path, task_spec.get("dependencies", []))
     conventions = (project_path / "conventions.md").read_text()
@@ -336,17 +542,12 @@ PRIOR OUTPUTS:
 {prior if prior else 'No prior outputs (this is a foundational task)'}
 """
     
-    model = config.EXECUTOR_MODEL
-    # Future: add extended thinking for HIGH complexity tasks
-    
-    response = client.messages.create(
-        model=model,
-        max_tokens=config.MAX_TOKENS_EXECUTOR,
+    output = router.call(
+        role="executor",
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_content}]
+        user=user_content,
+        max_tokens=config.MAX_TOKENS_EXECUTOR
     )
-    
-    output = response.content[0].text
     
     # Write to file tree
     stage_dir = project_path / "stages" / f"stage_{task_spec['stage']}"
@@ -360,19 +561,14 @@ def write_stage_summary(project_path: Path, stage: int) -> str:
     """Synthesize all task outputs for a stage into a summary."""
     stage_dir = project_path / "stages" / f"stage_{stage}"
     task_files = sorted(stage_dir.glob("S*.md"))
-    
     combined = "\n\n".join(f.read_text() for f in task_files)
-    
-    response = client.messages.create(
-        model=config.EXECUTOR_MODEL,
-        max_tokens=2000,
+
+    return router.call(
+        role="executor",
         system="Synthesize the following task outputs into a coherent stage summary. Be accurate and complete. Do not introduce information not in the task outputs.",
-        messages=[{"role": "user", "content": combined}]
+        user=combined,
+        max_tokens=2000
     )
-    
-    summary = response.content[0].text
-    (stage_dir / "summary.md").write_text(summary)
-    return summary
 ```
 
 **Phase 2 pass criteria:** Run executor on 3–5 tasks from the decomposed problem. Read every output carefully. Does it show its reasoning? Does it use INCOMPLETE appropriately? Are the CHECKS PERFORMED sections honest? If the model is still faking derivations, the system prompt needs stronger constraints — iterate before moving on.
@@ -494,11 +690,8 @@ Last output summary (first 500 chars):
 
 `core/verifier.py`:
 ```python
-import anthropic
-from pathlib import Path
+from core import router
 import config
-
-client = anthropic.Anthropic(api_key=config.ANTHROPIC_KEY)
 
 VERIFIER_SYSTEM = """You are an adversarial reviewer. You have NO knowledge of how this output was produced.
 
@@ -520,7 +713,8 @@ Be adversarial. Assume errors exist until proven otherwise. Do not give benefit 
 def verify(task_spec: dict, output: str, is_foundational: bool = False) -> str:
     """
     Run verification on a task output.
-    Uses cross-provider model for foundational results.
+    For foundational results, uses cross_check role (different model/provider at each tier).
+    For standard results, uses verifier role.
     """
     user_content = f"""
 TASK SPECIFICATION:
@@ -532,29 +726,13 @@ VERIFICATION CRITERIA (what done actually looks like):
 OUTPUT TO REVIEW:
 {output}
 """
-    
-    if is_foundational:
-        # Cross-provider for foundational results
-        import openai
-        oai_client = openai.OpenAI(api_key=config.OPENAI_KEY)
-        response = oai_client.chat.completions.create(
-            model=config.VERIFIER_MODEL_CROSS,
-            messages=[
-                {"role": "system", "content": VERIFIER_SYSTEM},
-                {"role": "user", "content": user_content}
-            ],
-            max_tokens=config.MAX_TOKENS_VERIFIER
-        )
-        return response.choices[0].message.content
-    else:
-        # Same provider, cold context (no conversation history passed)
-        response = client.messages.create(
-            model=config.VERIFIER_MODEL_PRIMARY,
-            max_tokens=config.MAX_TOKENS_VERIFIER,
-            system=VERIFIER_SYSTEM,
-            messages=[{"role": "user", "content": user_content}]
-        )
-        return response.content[0].text
+    role = "cross_check" if is_foundational else "verifier"
+    return router.call(
+        role=role,
+        system=VERIFIER_SYSTEM,
+        user=user_content,
+        max_tokens=config.MAX_TOKENS_VERIFIER
+    )
 ```
 
 **Phase 3 pass criteria:** Run the supervisor on a batch of executor outputs — including some you know contain errors. Does it catch them? Does it produce false positives? Tune the heuristics. Run verifier on the same outputs. Does the verifier catch errors the supervisor missed? Does cross-provider verification produce meaningfully different results from single-provider?
@@ -778,88 +956,758 @@ def run_stage(project_id: str, stage: int, task_specs: list):
 
 ---
 
-## Phase 6 — Domain Oracle (Computational Genomics)
+## Phase 6 — Domain Oracle (Astrophysics)
 
-**Time estimate:** 1 week (requires domain knowledge or collaborator)  
+**Time estimate:** 1–1.5 weeks (requires domain knowledge or collaborator)  
 **Cost:** $0 (programmatic checks, no API calls)
 
-`oracle/genomics/benchmark_checks.py`:
+The oracle layer provides ground-truth verification that does not rely on model judgment. For astrophysics this means: known physical constants and limits, benchmark catalog recovery, dimensional and unit consistency, and statistical sanity checks on derived quantities. These checks run after executor outputs are written and before the verifier model is invoked — catching hard errors cheaply.
+
+Repository structure for this phase:
+```
+oracle/
+  astro/
+    physical_checks.py       # dimensional analysis, known constant bounds
+    catalog_checks.py        # recovery of benchmark objects with known properties
+    statistical_checks.py    # uncertainty propagation, S/N, chi-squared sanity
+    spectral_checks.py       # line identification, velocity/redshift consistency
+    photometry_checks.py     # flux conservation, magnitude system consistency
+    run_oracle.py            # entry point: run all applicable checks for a task output
+```
+
+---
+
+### 6.1 Physical constraint checks
+
+`oracle/astro/physical_checks.py`:
 ```python
 import numpy as np
-from scipy import stats
 
-def check_pvalue_calibration(pvalues: np.ndarray, alpha: float = 0.05) -> dict:
+# Fundamental constants (SI)
+C_LIGHT = 2.998e8        # m/s
+H_PLANCK = 6.626e-34     # J·s
+K_BOLTZMANN = 1.381e-23  # J/K
+G_NEWTON = 6.674e-11     # m^3 kg^-1 s^-2
+M_SUN = 1.989e30         # kg
+L_SUN = 3.828e26         # W
+PC_TO_M = 3.086e16       # meters per parsec
+
+def check_velocity_physical(velocity_km_s: float, context: str = "") -> dict:
     """
-    Under the null, p-values should be uniform.
-    A new method's p-values on null data should pass this check.
+    Velocities must be sub-relativistic for most astrophysical contexts,
+    and must not exceed c under any circumstances.
+    For stellar/galactic dynamics: flag if |v| > 0.1c (30,000 km/s).
+    For cosmological redshifts: apply relativistic formula check separately.
     """
-    stat, p = stats.kstest(pvalues, 'uniform')
+    v_c = abs(velocity_km_s) / (C_LIGHT / 1e3)
+    superluminal = v_c >= 1.0
+    suspicious = v_c > 0.1 and context not in ("cosmological", "relativistic_jet")
+
     return {
-        "check": "p-value calibration under null",
-        "statistic": stat,
-        "p_value": p,
-        "pass": p > alpha,
-        "interpretation": "PASS: p-values appear calibrated" if p > alpha 
-                         else f"FAIL: p-values not uniform (KS p={p:.4f})"
+        "check": "velocity physical bound",
+        "velocity_km_s": velocity_km_s,
+        "v_over_c": round(v_c, 6),
+        "pass": not superluminal,
+        "warning": suspicious and not superluminal,
+        "interpretation": (
+            "FAIL: superluminal velocity" if superluminal else
+            f"WARN: v/c = {v_c:.3f}, verify context is relativistic" if suspicious else
+            "PASS"
+        )
     }
 
-def check_known_positives_recovered(
-    results: dict, 
-    known_positive_genes: list,
-    fdr_threshold: float = 0.05
-) -> dict:
+def check_luminosity_physical(luminosity_lsun: float) -> dict:
     """
-    A valid DE method should recover known differentially expressed genes
-    on benchmark datasets.
+    Stellar luminosities must be within plausible astrophysical range.
+    Below ~1e-5 L_sun: sub-stellar / brown dwarf territory (flag if claimed stellar).
+    Above ~1e7 L_sun: hyperluminous, near Eddington for massive stars — flag for justification.
     """
-    sig_genes = {g for g, fdr in results.items() if fdr < fdr_threshold}
-    recovered = sig_genes & set(known_positive_genes)
-    recall = len(recovered) / len(known_positive_genes)
-    
+    too_faint = luminosity_lsun < 1e-6
+    hyperluminous = luminosity_lsun > 5e6
+
     return {
-        "check": "recovery of known positive genes",
-        "recall": recall,
-        "recovered": list(recovered),
-        "missed": list(set(known_positive_genes) - recovered),
-        "pass": recall > 0.7,
-        "interpretation": f"{'PASS' if recall > 0.7 else 'FAIL'}: {recall:.1%} recall on known positives"
+        "check": "stellar luminosity plausibility",
+        "luminosity_lsun": luminosity_lsun,
+        "pass": not too_faint,
+        "warning": hyperluminous,
+        "interpretation": (
+            f"FAIL: luminosity {luminosity_lsun:.2e} L_sun below sub-stellar floor" if too_faint else
+            f"WARN: hyperluminous {luminosity_lsun:.2e} L_sun — verify Eddington justification" if hyperluminous else
+            "PASS"
+        )
     }
 
-def check_method_degrades_gracefully(
-    full_results: dict,
-    downsampled_results: dict,
-    tolerance: float = 0.3
+def check_eddington_limit(luminosity_lsun: float, mass_msun: float) -> dict:
+    """
+    For accreting compact objects, luminosity should not exceed Eddington limit
+    (unless super-Eddington accretion is explicitly the subject of study).
+    L_Edd ≈ 3.2e4 * (M / M_sun) L_sun
+    """
+    l_edd_lsun = 3.2e4 * mass_msun
+    ratio = luminosity_lsun / l_edd_lsun
+
+    return {
+        "check": "Eddington luminosity limit",
+        "L_over_L_Edd": round(ratio, 4),
+        "L_Edd_lsun": l_edd_lsun,
+        "pass": ratio <= 10.0,  # allow moderate super-Eddington
+        "warning": ratio > 1.0,
+        "interpretation": (
+            f"FAIL: L/L_Edd = {ratio:.2f}, far exceeds Eddington — requires explicit justification" if ratio > 10.0 else
+            f"WARN: super-Eddington L/L_Edd = {ratio:.2f}" if ratio > 1.0 else
+            "PASS"
+        )
+    }
+
+def check_distance_modulus_consistent(
+    apparent_mag: float, 
+    absolute_mag: float, 
+    distance_pc: float,
+    extinction_mag: float = 0.0
 ) -> dict:
     """
-    Results on downsampled data should be broadly consistent with full data.
-    Large disagreements suggest the method is unstable.
+    Distance modulus: m - M = 5*log10(d/10 pc) + A
+    Check that apparent mag, absolute mag, distance, and extinction are mutually consistent.
     """
-    full_genes = set(full_results.keys())
-    down_genes = set(downsampled_results.keys())
-    overlap = len(full_genes & down_genes) / len(full_genes) if full_genes else 0
-    
+    mu_derived = 5 * np.log10(distance_pc / 10.0) + extinction_mag
+    m_predicted = absolute_mag + mu_derived
+    residual = abs(apparent_mag - m_predicted)
+
     return {
-        "check": "graceful degradation under downsampling",
-        "overlap": overlap,
-        "pass": overlap > (1 - tolerance),
-        "interpretation": f"{'PASS' if overlap > (1-tolerance) else 'FAIL'}: {overlap:.1%} overlap between full and downsampled results"
+        "check": "distance modulus self-consistency",
+        "mu_derived": round(mu_derived, 3),
+        "m_predicted": round(m_predicted, 3),
+        "m_reported": apparent_mag,
+        "residual_mag": round(residual, 4),
+        "pass": residual < 0.05,
+        "interpretation": (
+            f"FAIL: distance modulus inconsistency of {residual:.3f} mag" if residual >= 0.05 else
+            "PASS"
+        )
+    }
+
+def check_stefan_boltzmann_consistent(
+    luminosity_lsun: float, 
+    radius_rsun: float, 
+    temperature_k: float,
+    tolerance: float = 0.05
+) -> dict:
+    """
+    Stefan-Boltzmann: L = 4π R² σ T⁴
+    Given any two of {L, R, T}, the third should be consistent.
+    """
+    SIGMA = 5.670e-8  # W m^-2 K^-4
+    R_SUN = 6.957e8   # m
+
+    R_m = radius_rsun * R_SUN
+    L_predicted_W = 4 * np.pi * R_m**2 * SIGMA * temperature_k**4
+    L_predicted_lsun = L_predicted_W / L_SUN
+    
+    ratio = luminosity_lsun / L_predicted_lsun
+    fractional_error = abs(ratio - 1.0)
+
+    return {
+        "check": "Stefan-Boltzmann self-consistency",
+        "L_reported_lsun": luminosity_lsun,
+        "L_predicted_lsun": round(L_predicted_lsun, 4),
+        "ratio": round(ratio, 4),
+        "pass": fractional_error < tolerance,
+        "interpretation": (
+            f"FAIL: L/R/T inconsistency — ratio {ratio:.3f}, expected 1.0 ± {tolerance}" if fractional_error >= tolerance else
+            "PASS"
+        )
     }
 ```
 
 ---
 
-## Phase 7 — First Paper Run
+### 6.2 Catalog recovery checks
+
+`oracle/astro/catalog_checks.py`:
+```python
+import numpy as np
+
+# Benchmark objects: name -> known properties (literature values)
+# Extend this as the target problem requires.
+BENCHMARK_STARS = {
+    "Vega":        {"T_eff": 9600,  "log_g": 3.95, "M_V": 0.582,  "SpType": "A0V"},
+    "Sun":         {"T_eff": 5778,  "log_g": 4.44, "M_V": 4.83,   "SpType": "G2V"},
+    "Sirius_A":    {"T_eff": 9940,  "log_g": 4.33, "M_V": 1.43,   "SpType": "A1V"},
+    "Betelgeuse":  {"T_eff": 3500,  "log_g": 0.5,  "M_V": -5.85,  "SpType": "M1Ia"},
+    "Proxima_Cen": {"T_eff": 3042,  "log_g": 5.20, "M_V": 15.53,  "SpType": "M5.5Ve"},
+}
+
+BENCHMARK_GALAXIES = {
+    "M87":   {"z": 0.00436, "M_BH_msun": 6.5e9,  "type": "E0"},
+    "M31":   {"z": -0.001,  "dist_kpc": 785,      "type": "SA(s)b"},
+    "M82":   {"z": 0.000677,"SFR_msun_yr": 13.0,  "type": "starburst"},
+    "NGC1052":{"z": 0.00504, "M_BH_msun": 1.5e8,  "type": "E4"},
+}
+
+def check_benchmark_star_recovery(
+    name: str,
+    derived_properties: dict,
+    tolerances: dict = None
+) -> dict:
+    """
+    Verify that derived stellar parameters match literature values for benchmark stars.
+    tolerances: dict of property -> fractional tolerance (default 5% for T_eff, 0.1 dex for log_g)
+    """
+    if tolerances is None:
+        tolerances = {"T_eff": 0.05, "log_g": 0.1, "M_V": 0.1}
+
+    if name not in BENCHMARK_STARS:
+        return {"check": "benchmark star recovery", "pass": None,
+                "interpretation": f"SKIP: {name} not in benchmark catalog"}
+
+    known = BENCHMARK_STARS[name]
+    failures = []
+    warnings = []
+
+    for prop, tol in tolerances.items():
+        if prop not in derived_properties or prop not in known:
+            continue
+        derived = derived_properties[prop]
+        reference = known[prop]
+        fractional = abs(derived - reference) / abs(reference)
+        if fractional > tol:
+            failures.append(f"{prop}: derived={derived}, known={reference}, err={fractional:.1%}")
+
+    return {
+        "check": f"benchmark star recovery: {name}",
+        "failures": failures,
+        "pass": len(failures) == 0,
+        "interpretation": (
+            f"FAIL: {'; '.join(failures)}" if failures else "PASS"
+        )
+    }
+
+def check_benchmark_galaxy_recovery(
+    name: str,
+    derived_properties: dict,
+    tolerances: dict = None
+) -> dict:
+    """
+    Verify derived galaxy properties against literature values.
+    """
+    if tolerances is None:
+        tolerances = {"z": 0.001, "dist_kpc": 0.05}
+
+    if name not in BENCHMARK_GALAXIES:
+        return {"check": "benchmark galaxy recovery", "pass": None,
+                "interpretation": f"SKIP: {name} not in benchmark catalog"}
+
+    known = BENCHMARK_GALAXIES[name]
+    failures = []
+
+    for prop, tol in tolerances.items():
+        if prop not in derived_properties or prop not in known:
+            continue
+        derived = derived_properties[prop]
+        reference = known[prop]
+        fractional = abs(derived - reference) / (abs(reference) + 1e-12)
+        if fractional > tol:
+            failures.append(f"{prop}: derived={derived}, known={reference}, err={fractional:.1%}")
+
+    return {
+        "check": f"benchmark galaxy recovery: {name}",
+        "failures": failures,
+        "pass": len(failures) == 0,
+        "interpretation": (
+            f"FAIL: {'; '.join(failures)}" if failures else "PASS"
+        )
+    }
+```
+
+---
+
+### 6.3 Statistical checks
+
+`oracle/astro/statistical_checks.py`:
+```python
+import numpy as np
+from scipy import stats
+
+def check_uncertainty_propagation(
+    value: float,
+    uncertainty: float,
+    snr_floor: float = 1.0
+) -> dict:
+    """
+    Uncertainty must be positive and finite.
+    Signal-to-noise ratio must exceed floor (default S/N > 1 to be reported).
+    Fractional uncertainty > 1 (100%) warrants a warning.
+    """
+    if uncertainty <= 0 or not np.isfinite(uncertainty):
+        return {
+            "check": "uncertainty propagation",
+            "pass": False,
+            "interpretation": f"FAIL: non-physical uncertainty value {uncertainty}"
+        }
+    snr = abs(value) / uncertainty
+    high_frac = (uncertainty / abs(value)) > 1.0 if value != 0 else False
+
+    return {
+        "check": "uncertainty propagation",
+        "snr": round(snr, 2),
+        "fractional_uncertainty": round(uncertainty / abs(value), 4) if value != 0 else None,
+        "pass": snr >= snr_floor,
+        "warning": high_frac,
+        "interpretation": (
+            f"FAIL: S/N = {snr:.2f} below floor {snr_floor}" if snr < snr_floor else
+            f"WARN: fractional uncertainty > 100%" if high_frac else
+            "PASS"
+        )
+    }
+
+def check_chi_squared_fit(
+    chi2: float,
+    n_data: int,
+    n_params: int,
+    tolerance: float = 3.0
+) -> dict:
+    """
+    Reduced chi-squared chi2_r = chi2 / (n_data - n_params).
+    chi2_r >> 1: poor fit (underestimated errors or wrong model).
+    chi2_r << 1: overfitting or overestimated errors.
+    Flag if chi2_r outside [1/tolerance, tolerance].
+    """
+    dof = n_data - n_params
+    if dof <= 0:
+        return {"check": "chi-squared fit quality", "pass": False,
+                "interpretation": f"FAIL: non-positive DOF ({dof})"}
+
+    chi2_r = chi2 / dof
+    p_value = 1.0 - stats.chi2.cdf(chi2, dof)
+
+    good = (1.0 / tolerance) <= chi2_r <= tolerance
+
+    return {
+        "check": "chi-squared fit quality",
+        "chi2_reduced": round(chi2_r, 4),
+        "dof": dof,
+        "p_value": round(p_value, 6),
+        "pass": good,
+        "interpretation": (
+            f"FAIL: chi2_r = {chi2_r:.3f}, poor fit (should be near 1.0)" if not good else
+            "PASS"
+        )
+    }
+
+def check_redshift_distance_consistency(
+    redshift: float,
+    distance_mpc: float,
+    H0: float = 70.0,
+    tolerance: float = 0.10
+) -> dict:
+    """
+    Hubble law sanity check for low-z sources (z < 0.3): d ≈ cz/H0.
+    For z > 0.3, a full cosmological calculation is needed — flag for manual review.
+    """
+    if redshift > 0.3:
+        return {
+            "check": "redshift-distance consistency",
+            "pass": None,
+            "interpretation": "SKIP: z > 0.3 requires full cosmological computation, not Hubble law"
+        }
+
+    d_hubble_mpc = (2.998e5 * redshift) / H0
+    fractional = abs(distance_mpc - d_hubble_mpc) / d_hubble_mpc
+
+    return {
+        "check": "redshift-distance consistency (Hubble law)",
+        "z": redshift,
+        "d_reported_mpc": distance_mpc,
+        "d_hubble_mpc": round(d_hubble_mpc, 3),
+        "fractional_discrepancy": round(fractional, 4),
+        "pass": fractional < tolerance,
+        "interpretation": (
+            f"FAIL: d_reported={distance_mpc} Mpc vs d_Hubble={d_hubble_mpc:.1f} Mpc ({fractional:.1%} discrepancy)" if fractional >= tolerance else
+            "PASS"
+        )
+    }
+
+def check_photon_count_statistics(
+    counts: float,
+    reported_snr: float,
+    tolerance: float = 0.05
+) -> dict:
+    """
+    For Poisson-dominated photon counting (CCD/detector data):
+    Expected S/N ≈ sqrt(counts). Check reported S/N is consistent.
+    """
+    expected_snr = np.sqrt(max(counts, 0))
+    if expected_snr == 0:
+        return {"check": "photon count statistics", "pass": False,
+                "interpretation": "FAIL: zero counts"}
+
+    fractional = abs(reported_snr - expected_snr) / expected_snr
+
+    return {
+        "check": "photon count Poisson statistics",
+        "counts": counts,
+        "expected_snr": round(expected_snr, 2),
+        "reported_snr": reported_snr,
+        "fractional_discrepancy": round(fractional, 4),
+        "pass": fractional < tolerance,
+        "interpretation": (
+            f"WARN: reported S/N={reported_snr:.1f} vs Poisson-expected {expected_snr:.1f} ({fractional:.1%} discrepancy)" if fractional >= tolerance else
+            "PASS"
+        )
+    }
+```
+
+---
+
+### 6.4 Spectral checks
+
+`oracle/astro/spectral_checks.py`:
+```python
+import numpy as np
+
+# Common spectral lines: name -> vacuum rest wavelength (Angstroms)
+SPECTRAL_LINES = {
+    # Hydrogen Balmer series
+    "H_alpha":    6564.61,
+    "H_beta":     4862.68,
+    "H_gamma":    4341.68,
+    "H_delta":    4102.89,
+    # Lyman series
+    "Ly_alpha":   1215.67,
+    "Ly_beta":    1025.72,
+    # Metal lines
+    "CaII_K":     3933.66,
+    "CaII_H":     3968.47,
+    "NaI_D1":     5895.92,
+    "NaI_D2":     5889.95,
+    "MgII_2796":  2796.35,
+    "MgII_2803":  2803.53,
+    "OII_3727":   3727.09,
+    "OIII_4959":  4960.30,
+    "OIII_5007":  5008.24,
+    "NII_6548":   6549.86,
+    "NII_6583":   6585.27,
+    "SII_6716":   6718.29,
+    "SII_6731":   6732.67,
+    # CO bandheads (near-IR)
+    "CO_2-0":     22935.0,
+    "CO_3-1":     23227.0,
+}
+
+def check_redshift_from_lines(
+    observed_wavelengths: dict,
+    tolerance_km_s: float = 50.0
+) -> dict:
+    """
+    Given observed wavelengths for multiple identified lines, check that all
+    implied redshifts are mutually consistent.
+    observed_wavelengths: dict of line_name -> observed_wavelength_angstrom
+    """
+    C_KM_S = 2.998e5
+
+    redshifts = {}
+    for line, obs_wl in observed_wavelengths.items():
+        if line not in SPECTRAL_LINES:
+            continue
+        rest_wl = SPECTRAL_LINES[line]
+        z = (obs_wl - rest_wl) / rest_wl
+        redshifts[line] = z
+
+    if len(redshifts) < 2:
+        return {
+            "check": "multi-line redshift consistency",
+            "pass": None,
+            "interpretation": "SKIP: fewer than 2 identified lines"
+        }
+
+    z_values = list(redshifts.values())
+    z_mean = np.mean(z_values)
+    z_std = np.std(z_values)
+    max_dv = z_std * C_KM_S  # velocity scatter in km/s
+
+    inconsistent = {k: v for k, v in redshifts.items() 
+                    if abs(v - z_mean) * C_KM_S > tolerance_km_s}
+
+    return {
+        "check": "multi-line redshift consistency",
+        "z_mean": round(z_mean, 6),
+        "z_std": round(z_std, 8),
+        "velocity_scatter_km_s": round(max_dv, 2),
+        "inconsistent_lines": inconsistent,
+        "pass": len(inconsistent) == 0,
+        "interpretation": (
+            f"FAIL: lines {list(inconsistent.keys())} inconsistent with z_mean={z_mean:.5f}" if inconsistent else
+            f"PASS: all lines consistent at z={z_mean:.5f} ± {max_dv:.1f} km/s"
+        )
+    }
+
+def check_line_ratio_physical(
+    ratio_name: str,
+    observed_ratio: float
+) -> dict:
+    """
+    Diagnostic line ratios must fall within physically allowed ranges.
+    Known forbidden ranges indicate calibration errors or misidentification.
+    """
+    PHYSICAL_RANGES = {
+        # BPT diagram bounds
+        "NII_Ha":      (1e-3, 10.0),    # [NII]6583 / H_alpha
+        "OIII_Hb":     (0.01, 100.0),   # [OIII]5007 / H_beta
+        "SII_Ha":      (0.01, 5.0),     # [SII]6716+6731 / H_alpha
+        # Balmer decrement (intrinsic H_alpha/H_beta = 2.86 for Case B)
+        "Balmer_dec":  (2.0, 20.0),     # reddened values up to ~20
+        # [OIII] doublet ratio (density sensitive)
+        "OIII_doublet":(0.33, 3.0),     # 4959/5007 ≈ 1/3 (theoretical), allow range
+        # [SII] doublet ratio (density sensitive: 0.44 < r < 1.42)
+        "SII_doublet": (0.40, 1.50),
+    }
+
+    if ratio_name not in PHYSICAL_RANGES:
+        return {"check": f"line ratio physical range: {ratio_name}", "pass": None,
+                "interpretation": f"SKIP: {ratio_name} not in known ratio catalog"}
+
+    lo, hi = PHYSICAL_RANGES[ratio_name]
+    in_range = lo <= observed_ratio <= hi
+
+    return {
+        "check": f"line ratio physical range: {ratio_name}",
+        "observed": observed_ratio,
+        "allowed_range": (lo, hi),
+        "pass": in_range,
+        "interpretation": (
+            f"FAIL: {ratio_name} = {observed_ratio:.3f} outside physical range [{lo}, {hi}]" if not in_range else
+            "PASS"
+        )
+    }
+```
+
+---
+
+### 6.5 Photometry checks
+
+`oracle/astro/photometry_checks.py`:
+```python
+import numpy as np
+
+# AB magnitude zero points (Jy) for common filters
+# m_AB = -2.5*log10(f_nu / 3631 Jy)
+AB_ZEROPOINT_JY = 3631.0
+
+# Approximate effective wavelengths (Angstroms) for common filter systems
+FILTER_WAVELENGTHS = {
+    # SDSS
+    "u": 3543, "g": 4770, "r": 6231, "i": 7625, "z": 9134,
+    # 2MASS
+    "J": 12350, "H": 16620, "K": 21590,
+    # HST WFC3
+    "F275W": 2750, "F336W": 3360, "F435W": 4350,
+    "F606W": 6060, "F814W": 8140,
+    # Johnson-Cousins
+    "U": 3650, "B": 4450, "V": 5510, "R": 6580, "I": 8060,
+}
+
+def check_color_physical(
+    filter1: str,
+    filter2: str,
+    color: float
+) -> dict:
+    """
+    Colors (mag1 - mag2) must be within physically plausible stellar ranges.
+    Extreme colors indicate: calibration failure, high extinction, or unusual objects
+    (which should be noted explicitly if intentional).
+    """
+    # Bluest to reddest normal stellar colors (approximate)
+    COLOR_RANGES = {
+        ("B", "V"):   (-0.4, 2.5),
+        ("V", "I"):   (-0.5, 4.0),
+        ("V", "K"):   (-0.5, 8.0),
+        ("g", "r"):   (-0.5, 2.5),
+        ("r", "i"):   (-0.4, 1.5),
+        ("J", "K"):   (-0.2, 2.5),
+    }
+
+    key = (filter1, filter2)
+    key_rev = (filter2, filter1)
+
+    if key in COLOR_RANGES:
+        lo, hi = COLOR_RANGES[key]
+        in_range = lo <= color <= hi
+    elif key_rev in COLOR_RANGES:
+        lo, hi = COLOR_RANGES[key_rev]
+        in_range = -hi <= color <= -lo
+    else:
+        return {"check": f"color ({filter1}-{filter2}) physical range", "pass": None,
+                "interpretation": f"SKIP: no bounds defined for ({filter1}-{filter2})"}
+
+    return {
+        "check": f"color ({filter1}-{filter2}) physical range",
+        "color": color,
+        "allowed_range": (lo, hi),
+        "pass": in_range,
+        "interpretation": (
+            f"FAIL: ({filter1}-{filter2}) = {color:.3f} outside stellar range [{lo}, {hi}]" if not in_range else
+            "PASS"
+        )
+    }
+
+def check_flux_conservation(
+    broadband_flux_jy: float,
+    integrated_spectrum_flux_jy: float,
+    tolerance: float = 0.05
+) -> dict:
+    """
+    Integrated flux from a spectrum convolved with a filter bandpass
+    should match the broadband photometry in that filter.
+    Discrepancy > tolerance indicates flux calibration error.
+    """
+    fractional = abs(broadband_flux_jy - integrated_spectrum_flux_jy) / broadband_flux_jy
+
+    return {
+        "check": "flux conservation: photometry vs spectrum",
+        "broadband_jy": broadband_flux_jy,
+        "spectrum_integrated_jy": integrated_spectrum_flux_jy,
+        "fractional_discrepancy": round(fractional, 5),
+        "pass": fractional < tolerance,
+        "interpretation": (
+            f"FAIL: {fractional:.1%} flux discrepancy between photometry and spectrum" if fractional >= tolerance else
+            "PASS"
+        )
+    }
+
+def check_magnitude_system_consistent(
+    mag_ab: float,
+    mag_vega: float,
+    filter_name: str,
+    tolerance: float = 0.05
+) -> dict:
+    """
+    AB and Vega magnitudes differ by known, filter-dependent offsets.
+    If both are reported, verify their difference matches the expected offset.
+    Approximate AB-Vega offsets:
+    V: +0.02, B: -0.10, R: +0.16, I: +0.40, J: +0.91, H: +1.39, K: +1.85
+    g: -0.08, r: +0.16, i: +0.37, z: +0.54
+    """
+    AB_VEGA_OFFSETS = {
+        "V": 0.02, "B": -0.10, "R": 0.16, "I": 0.40,
+        "J": 0.91, "H": 1.39, "K": 1.85,
+        "g": -0.08, "r": 0.16, "i": 0.37, "z": 0.54,
+    }
+
+    if filter_name not in AB_VEGA_OFFSETS:
+        return {"check": "magnitude system consistency", "pass": None,
+                "interpretation": f"SKIP: no AB-Vega offset defined for filter {filter_name}"}
+
+    expected_offset = AB_VEGA_OFFSETS[filter_name]
+    observed_offset = mag_ab - mag_vega
+    residual = abs(observed_offset - expected_offset)
+
+    return {
+        "check": f"AB/Vega magnitude system consistency: {filter_name}",
+        "mag_ab": mag_ab,
+        "mag_vega": mag_vega,
+        "observed_offset": round(observed_offset, 4),
+        "expected_offset": expected_offset,
+        "residual": round(residual, 4),
+        "pass": residual < tolerance,
+        "interpretation": (
+            f"FAIL: AB-Vega offset = {observed_offset:.3f}, expected {expected_offset:.3f} for {filter_name}" if residual >= tolerance else
+            "PASS"
+        )
+    }
+```
+
+---
+
+### 6.6 Oracle runner
+
+`oracle/astro/run_oracle.py`:
+```python
+import json
+from pathlib import Path
+from oracle.astro import physical_checks, statistical_checks
+
+def run_all_checks(checks: list) -> dict:
+    """
+    Run a list of pre-constructed check calls and aggregate results.
+    checks: list of dicts returned by individual check functions
+    """
+    passed = [c for c in checks if c.get("pass") is True]
+    failed = [c for c in checks if c.get("pass") is False]
+    warned = [c for c in checks if c.get("warning") is True]
+    skipped = [c for c in checks if c.get("pass") is None]
+
+    all_pass = len(failed) == 0
+
+    return {
+        "oracle_pass": all_pass,
+        "summary": {
+            "total": len(checks),
+            "passed": len(passed),
+            "failed": len(failed),
+            "warnings": len(warned),
+            "skipped": len(skipped),
+        },
+        "failures": [{"check": c["check"], "interpretation": c["interpretation"]} for c in failed],
+        "warnings": [{"check": c["check"], "interpretation": c["interpretation"]} for c in warned],
+    }
+
+def write_oracle_report(project_path: Path, task_id: str, results: dict):
+    stage = task_id[1]
+    oracle_dir = project_path / "stages" / f"stage_{stage}" / "oracle"
+    oracle_dir.mkdir(parents=True, exist_ok=True)
+    report_path = oracle_dir / f"{task_id}_oracle.json"
+    report_path.write_text(json.dumps(results, indent=2))
+    return report_path
+```
+
+**Phase 6 pass criteria:** For each check type, write a unit test with a known-good and a known-bad input. All checks must correctly classify both. Run the oracle on a sample of executor outputs — at least one should produce a real failure that catches an error the verifier model missed.
+
+---
+
+## Phase 7 — First Paper Run (Astrophysics)
 
 With all components working, run the full system on the target research problem.
 
-**Suggested target:** A formal statistical correction for batch effects in trajectory inference — novel enough to be publishable, computational enough to be fully verifiable, immediately useful to the field.
+**Suggested target:** A quantitative analysis of an open problem in stellar physics, galactic structure, or time-domain astronomy that is well-posed (clear inputs and success criteria), amenable to analytical or semi-analytical treatment, and testable against public archival data (SDSS, Gaia, 2MASS, APOGEE, HST, etc.).
+
+Concrete candidate problems suited to v1:
+- Derivation and validation of a photometric metallicity calibration for M dwarfs using Gaia + 2MASS colors, with cross-validation against APOGEE spectroscopic metallicities
+- Formal treatment of the color-magnitude diagram morphology for a well-studied open cluster, deriving age and distance modulus with explicit uncertainty propagation
+- A kinematic analysis of stellar streams in the Gaia DR3 catalog, deriving stream properties and assessing progenitor constraints
+- An analytic model for the projected mass profile of a galaxy cluster with X-ray + lensing consistency check
+
+Choose a problem where: (1) the answer is checkable against something you trust, (2) the derivation chain is explicit and traceable, and (3) the oracle checks above are directly applicable.
+
+**Domain context to supply at project initialization:**
+```
+Include in domain_context:
+- Target object(s) or catalog name and data access method (e.g. astroquery, direct download)
+- Relevant coordinate system and units conventions for this problem
+- Which physical checks are applicable (e.g. stellar vs. extragalactic)
+- Known literature values for any benchmark objects in the dataset
+- Any instrument-specific calibration issues (e.g. Gaia parallax zero point, SDSS fiber magnitude corrections)
+- Preferred magnitude system (AB or Vega) — must be consistent throughout
+```
+
+**Conventions file additions for astrophysics** (`projects/{id}/conventions.md`):
+```
+UNITS: All wavelengths in Angstroms unless noted. Distances in pc/kpc/Mpc (never mix). 
+       Magnitudes in AB system unless Vega explicitly stated.
+COORDINATES: ICRS J2000 throughout. Always state epoch when using proper motions.
+EQUATIONS: All LaTeX. Subscripts: obs = observed, rest = rest-frame, corr = corrected.
+CITATIONS: Use ADS bibcodes. Never invent references. Cite the original detection paper, not reviews.
+PHYSICAL CONSTANTS: Use values from oracle/astro/physical_checks.py — do not define inline.
+SIGNIFICANT FIGURES: Report uncertainties to 2 sig figs; values to matching precision.
+INCOMPLETE MARKERS: Use INCOMPLETE — [what is missing] when a derivation cannot be completed.
+```
 
 **Process:**
-1. `python scripts/new_project.py` — decompose and review
-2. Human approves task tree
-3. `python scripts/run_stage.py` — execute stage by stage with human checkpoints
-4. After all stages complete, synthesize outputs into LaTeX draft
-5. Domain expert reviews output — this is your pass/fail criteria
+1. `python scripts/new_project.py` — decompose with domain context above
+2. Human approves task tree, paying particular attention to: are observational data access tasks explicit? Are unit/system conventions stated per task?
+3. `python scripts/run_stage.py` — execute stage by stage
+4. After each task, oracle checks run automatically; verifier is triggered on failures and HIGH complexity tasks
+5. After all stages complete, synthesize outputs into LaTeX draft
+6. Cross-check key numerical results against published values or independent data products
 
 **Budget tracking:** Log API call counts and token usage per phase. Target: under $20 for a full run.
 

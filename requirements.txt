@@ -1,0 +1,6 @@
+anthropic
+openai
+pytest
+python-dotenv
+numpy
+scipy
