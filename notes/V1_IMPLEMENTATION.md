@@ -73,11 +73,61 @@ No LangChain. No AutoGen. No agent frameworks. Direct API calls with explicit pr
 
 ---
 
+## Model Progression Strategy
+
+The system is built in tiers. Start cheap. Validate the architecture works. Upgrade models only when the logic is proven.
+
+### Tier 0 — Free / Local (Phases 1–3, development)
+Use for: getting the pipeline wiring correct, prompt iteration, supervisor heuristic tuning. Output quality doesn't matter yet — you're testing structure, not science.
+
+| Role | Model | Provider | Cost |
+|------|-------|----------|------|
+| Supervisor | Llama 3.1 8B | Ollama (local) | $0 |
+| Executor | Llama 3.1 8B or 70B | Ollama (local) | $0 |
+| Verifier | Llama 3.1 8B | Ollama (local) | $0 |
+| Cross-check | Mistral 7B | Ollama (local) | $0 |
+
+Ollama runs models locally with an OpenAI-compatible API endpoint (`http://localhost:11434/v1`). Router points there; no code changes elsewhere.
+
+### Tier 1 — Cheap Cloud (Phase 4–5, integration testing)
+Use for: first real research runs, checking whether the pipeline produces coherent multi-stage outputs. Still not production quality — finding where the system breaks.
+
+| Role | Model | Provider | Est. cost/run |
+|------|-------|----------|---------------|
+| Supervisor | Gemini Flash 2.0 | Google AI | ~$0.01 |
+| Executor | Gemini Flash 2.0 or Llama 3.3 70B | Together AI | ~$0.50–1.00 |
+| Verifier | Gemini Flash 2.0 | Google AI | ~$0.50 |
+| Cross-check | Llama 3.3 70B | Together AI | ~$0.20 |
+
+Together AI and Google AI both expose OpenAI-compatible endpoints. Router swaps the base URL and model string; calling code is unchanged.
+
+### Tier 2 — Production (Phase 6+, real research runs)
+Use for: actual paper runs. Models capable enough to produce outputs worth verifying.
+
+| Role | Model | Provider | Est. cost/run |
+|------|-------|----------|---------------|
+| Supervisor | claude-haiku-4-5 | Anthropic | ~$0.05 |
+| Executor | claude-sonnet-4-6 | Anthropic | ~$2–4/stage |
+| Verifier (primary) | claude-sonnet-4-6 | Anthropic | ~$2–4/stage |
+| Cross-check (foundational only) | gpt-4o | OpenAI | ~$1–2/stage |
+
+### Upgrade criteria
+Don't upgrade a tier until:
+- The pipeline runs end-to-end without errors on that tier
+- The supervisor catches at least one real failure per stage
+- Stage gate correctly blocks on bad outputs and passes clean ones
+- You have a baseline output to compare against after upgrading
+
+Document what breaks when you upgrade — that's signal about what the system was hiding.
+
+---
+
 ## Repository Structure
 
 ```
 orchestrate/
   core/
+    router.py              # ALL model calls go through here — single source of truth
     decomposer.py
     executor.py
     supervisor.py
@@ -93,10 +143,13 @@ orchestrate/
     supervisor_system.md
     constraints.md
   oracle/
-    genomics/
-      benchmark_checks.py
-      calibration_checks.py
-      enrichment_checks.py
+    astro/
+      physical_checks.py     # constants, dimensional bounds, SB law, distance modulus
+      catalog_checks.py      # benchmark star/galaxy recovery
+      statistical_checks.py  # uncertainty, chi2, S/N, redshift-distance
+      spectral_checks.py     # line identification, redshift consistency, line ratios
+      photometry_checks.py   # flux conservation, color bounds, magnitude systems
+      run_oracle.py          # entry point: aggregate and report
   tests/
     unit/
       test_supervisor_heuristics.py
@@ -1200,10 +1253,27 @@ class TestGracefulDegradation:
         assert "pass" in r
 ```
 
-`oracle/genomics/benchmark_checks.py`:
+The oracle layer provides ground-truth verification that does not rely on model judgment. For astrophysics this means: known physical constants and limits, benchmark catalog recovery, dimensional and unit consistency, and statistical sanity checks on derived quantities. These checks run after executor outputs are written and before the verifier model is invoked — catching hard errors cheaply.
+
+Repository structure for this phase:
+```
+oracle/
+  astro/
+    physical_checks.py       # dimensional analysis, known constant bounds
+    catalog_checks.py        # recovery of benchmark objects with known properties
+    statistical_checks.py    # uncertainty propagation, S/N, chi-squared sanity
+    spectral_checks.py       # line identification, velocity/redshift consistency
+    photometry_checks.py     # flux conservation, magnitude system consistency
+    run_oracle.py            # entry point: run all applicable checks for a task output
+```
+
+---
+
+### 6.1 Physical constraint checks
+
+`oracle/astro/physical_checks.py`:
 ```python
 import numpy as np
-from scipy import stats
 
 def check_pvalue_calibration(pvalues: np.ndarray, alpha: float = 0.05) -> dict:
     stat, p = stats.kstest(pvalues, 'uniform')
@@ -1222,12 +1292,16 @@ def check_known_positives_recovered(
     recovered = sig & set(known_positive_genes)
     recall = len(recovered) / len(known_positive_genes) if known_positive_genes else 0.0
     return {
-        "check": "recovery of known positive genes",
-        "recall": recall,
-        "recovered": list(recovered),
-        "missed": list(set(known_positive_genes) - recovered),
-        "pass": recall > 0.7,
-        "interpretation": f"{'PASS' if recall > 0.7 else 'FAIL'}: {recall:.1%} recall on known positives"
+        "check": "distance modulus self-consistency",
+        "mu_derived": round(mu_derived, 3),
+        "m_predicted": round(m_predicted, 3),
+        "m_reported": apparent_mag,
+        "residual_mag": round(residual, 4),
+        "pass": residual < 0.05,
+        "interpretation": (
+            f"FAIL: distance modulus inconsistency of {residual:.3f} mag" if residual >= 0.05 else
+            "PASS"
+        )
     }
 
 def check_method_degrades_gracefully(
