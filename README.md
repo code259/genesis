@@ -7,9 +7,9 @@
 
 ## Overview
 
-Orchestrate is a research orchestration system designed to close the gap between what frontier AI models *can* do and what they *reliably produce* in real scientific work. It is not an autonomous AI scientist. It is a structured scaffold that lets a domain expert direct AI assistants through rigorous, verifiable, multi-stage research — producing outputs that are genuinely novel, not just plausible-looking.
+Genesis is a research orchestration system designed to close the gap between what frontier AI models *can* do and what they *reliably produce* in real scientific work. It is not an autonomous AI scientist; it is a structured scaffold that lets a domain expert direct AI assistants through rigorous, verifiable, multi-stage research, producing outputs that are genuinely novel, not just plausible-looking.
 
-The core insight: current LLMs fail at long research tasks not because they lack capability, but because they lack architecture. They lose context, drift from conventions, fake verification, stop checking too early, and collapse under pressure. Orchestrate treats these as engineering problems and solves them systematically.
+The core insight: current LLMs fail at long research tasks not because they lack capability, but because they lack architecture. They lose context, drift from conventions, fake verification, stop checking too early, and collapse under pressure. Genesis treats these as engineering problems and solves them systematically.
 
 ---
 
@@ -17,7 +17,7 @@ The core insight: current LLMs fail at long research tasks not because they lack
 
 In December 2025, Harvard physicist Matthew Schwartz guided Claude Opus 4.5 through a complete theoretical physics calculation — producing a genuine contribution to quantum field theory in two weeks rather than the typical one to two years. He used no autonomous AI pipeline. Instead, he built, largely by intuition, a structured workflow: hierarchical task trees, cross-model adversarial verification, explicit anti-hallucination constraints, and stage-gated progression.
 
-The paper was real. The result was novel. The method was reproducible.
+The result was a novel reproducible paper.
 
 Schwartz's conclusion: *"AI is not doing end-to-end science yet. But this project proves that I could create a set of prompts that can get Claude to do frontier science."*
 
