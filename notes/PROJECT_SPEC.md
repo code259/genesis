@@ -1,8 +1,8 @@
-## Title
+# Title
 Exoplanet Verification and Analysis for TIC 165202476
 
 ## Research Goal
-To gather data from the TOI catalog using the MAST database, specifically targeting TIC 165202476. We aim to rigorously verify and analyze this data to confidently confirm or refute its status as an exoplanet. The analysis will include spatial pixel-level verification and Bayesian inference to definitively rule out false positives and confidently constrain planetary parameters.
+To gather data from the TOI catalog using the MAST database, specifically targeting TIC 165202476. We aim to rigorously verify and analyze this data to confidently confirm or refute its status as an exoplanet. The analysis will include an independently implemented BLS algorithm, spatial pixel-level verification, and Bayesian inference to definitively rule out false positives and confidently constrain planetary parameters.
 
 ## Domain Context
 The analysis deals with identifying and confirming planetary transits from photometric time-series data. 
@@ -21,17 +21,21 @@ The core guiding principle of this project is strict **reproducibility**: a comp
 ## Constraints
 - **Strict Reproducibility:** Must exactingly document what data was used (e.g., data versions, timestamps), what software was written/used, and which parameters were chosen and why.
 - **Complication Handling:** Any data anomalies or complications encountered must be explicitly documented along with the steps taken to resolve them.
+- **No External Priors:** The analysis **strictly forbids** the use of any pre-calculated pipeline parameters, TOI catalog priors, or external ephemeris estimates.
+- **Independent BLS Calculation:** The code must implement its own Box-fitting Least Squares (BLS) algorithm from scratch to blindly search the raw time-series data. It must get all of these initial characteristics (orbital period, epoch, depth, and duration) using **only** this handwritten BLS algorithm and curve fitter, without using anything else. These derived parameters will then serve as the sole inputs for the subsequent FITS image checks and MCMC Bayesian inference.
 - **Excluded References:** Must explicitly avoid using or citing the following recent papers for this analysis: [A&A 2026 Paper](https://www.aanda.org/articles/aa/pdf/2026/03/aa57656-25.pdf) and [arXiv:2510.11528v1](https://arxiv.org/html/2510.11528v1).
 - Standard techniques must be cited appropriately referencing permitted peer-reviewed literature rather than re-explained.
 
 ## Deliverables
 - Fully reproducible analysis scripts or Jupyter notebooks.
+- A custom, standalone implementation of a BLS algorithm and curve fitter that independently derives all initial orbital characteristics strictly from the raw data, without relying on any external packages' off-the-shelf "black-box" BLS functions.
 - A descriptive methodology report tracking aperture analysis logic, parameter inferences, MCMC trace plots, and data provenance.
 - The final verification results, declaring and scientifically justifying the status of TIC 165202476.
 
 ## Verification Expectations
+- **Strictly Ground-Up Parameter Determination:** The analysis must **not** use any pre-estimated parameters or TOI catalog priors. It must execute its own custom BLS search over the MAST light curves to derive the transit ephemeris and characteristics independently. Prior estimates for the MCMC must originate **only** from this custom BLS algorithm, and nothing else.
 - **Ruling out False Positives via Spatial Analysis:** To verify astrophysical false positives without relying solely on a 1D time-series dataset, we will perform FITS file aperture analysis utilizing the downloaded Target Pixel Files (TPFs) from MAST. By examining the individual pixels within and surrounding the target aperture, we can track the flux centroid during the transit event. If nearby stars are actually the source of the dimming (causing a noticeable centroid shift during transit), we can confidently rule out Eclipsing Binaries (EBs) and Background Eclipsing Binaries (BEBs).
-- **Bayesian Inference for Orbital Parameters:** We will implement and run a Markov Chain Monte Carlo (MCMC) algorithm using the `allesfitter` module. This will leverage Bayesian inference to rigorously extract the true physical parameters for the orbit (e.g., radius ratio, inclination, semi-major axis, transit epoch) and accurately quantify their uncertainties.
+- **Bayesian Inference for Orbital Parameters:** We will implement and run a Markov Chain Monte Carlo (MCMC) algorithm using the `allesfitter` module. This will leverage Bayesian inference, initialized by the parameters from our BLS search, to rigorously extract the true physical parameters for the orbit (e.g., radius ratio, inclination, semi-major axis, transit epoch) and accurately quantify their uncertainties.
 - Another researcher must be able to take the raw dataset from MAST and, following our documented deliverables, arrive at the exact same physical parameters, MCMC posteriors, and final conclusion.
 
 ## Known Unknowns
