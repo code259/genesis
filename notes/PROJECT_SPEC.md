@@ -1,4 +1,4 @@
-# Title
+## Title
 Exoplanet Verification and Analysis for TIC 165202476
 
 ## Research Goal
