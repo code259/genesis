@@ -21,7 +21,7 @@ def new_project(research_goal: str, domain_context: str):
     task_tree = decompose(research_goal, domain_context)
     
     print("Running adversarial review of decomposition...")
-    review = adversarial_review(task_tree, research_goal)
+    review = adversarial_review(research_goal, task_tree)
     
     # Save both
     (project_path / "master_plan.md").write_text(task_tree)

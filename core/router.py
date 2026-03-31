@@ -1,6 +1,3 @@
-import os
-import anthropic  # type: ignore
-import openai  # type: ignore
 import config  # type: ignore
 
 # ─────────────────────────────────────────────
@@ -17,12 +14,12 @@ TIERS = {
         "decomposer":   {"provider": "ollama", "model": "llama3.1:8b"},
     },
     1: {
-        # Cheap cloud — Together AI (OpenAI-compatible) + Google AI
-        "supervisor":   {"provider": "together", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
-        "executor":     {"provider": "together", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
-        "verifier":     {"provider": "together", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
-        "cross_check":  {"provider": "together", "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"},
-        "decomposer":   {"provider": "together", "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo"},
+        # Cheap cloud — Groq for primary work, OpenAI for cross-provider checks
+        "supervisor":   {"provider": "groq",   "model": "llama-3.1-8b-instant"},
+        "executor":     {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
+        "verifier":     {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
+        "cross_check":  {"provider": "openai", "model": "gpt-4o-mini"},
+        "decomposer":   {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
     },
     2: {
         # Production — Anthropic + OpenAI
@@ -34,21 +31,42 @@ TIERS = {
     },
 }
 
+
+def _resolve_spec(active_tier: int, role: str) -> dict[str, str]:
+    spec = dict(TIERS[active_tier][role])
+
+    # Tier 1 should still work when only a Groq key is configured.
+    if active_tier == 1 and role == "cross_check" and spec["provider"] == "openai":
+        if not config.OPENAI_KEY and config.GROQ_KEY:
+            return {"provider": "groq", "model": "deepseek-r1-distill-llama-70b"}
+
+    return spec
+
 # ─────────────────────────────────────────────
 # PROVIDER CLIENTS
 # ─────────────────────────────────────────────
 
 def _get_client(provider: str):
     if provider == "anthropic":
+        import anthropic  # type: ignore
         return anthropic.Anthropic(api_key=config.ANTHROPIC_KEY)
     elif provider == "openai":
+        import openai  # type: ignore
         return openai.OpenAI(api_key=config.OPENAI_KEY)
+    elif provider == "groq":
+        import openai  # type: ignore
+        return openai.OpenAI(
+            api_key=config.GROQ_KEY,
+            base_url="https://api.groq.com/openai/v1"
+        )
     elif provider == "together":
+        import openai  # type: ignore
         return openai.OpenAI(
             api_key=config.TOGETHER_KEY,
             base_url="https://api.together.xyz/v1"
         )
     elif provider == "ollama":
+        import openai  # type: ignore
         return openai.OpenAI(
             api_key="ollama",
             base_url="http://localhost:11434/v1"
@@ -82,7 +100,7 @@ def call(
     Raises: RuntimeError with context on API failure.
     """
     active_tier = tier if tier is not None else config.MODEL_TIER
-    spec = TIERS[active_tier][role]
+    spec = _resolve_spec(active_tier, role)
     provider = spec["provider"]
     model = spec["model"]
 
@@ -108,7 +126,7 @@ def call(
             return response.content[0].text
 
         else:
-            # OpenAI-compatible: Together, Ollama, OpenAI
+            # OpenAI-compatible: Groq, Together, Ollama, OpenAI
             client = _get_client(provider)
             response = client.chat.completions.create(
                 model=model,
