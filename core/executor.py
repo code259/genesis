@@ -2,9 +2,12 @@ from __future__ import annotations
 
 # pyre-ignore-all-errors[21]
 import json
+import os
 from pathlib import Path
 from core import router  # pyre-ignore[21]
 from core.artifact_runner import run_python_task, task_artifact_dir
+from core.project_spec import parse_project_spec, project_spec_to_context  # pyre-ignore[21]
+from core.research_worker import mark_task_verified, run_task  # pyre-ignore[21]
 from core.task_parser import extract_stage
 import sys
 
@@ -32,9 +35,17 @@ def execute_task(
     project_path: Path,
     revision_context: str = "",
 ) -> str:
+    if should_use_worker(task_spec, project_path):
+        result = run_task(task_spec, project_path, revision_context=revision_context)
+        output_path = project_path / "stages" / f"stage_{task_spec['stage']}" / f"{task_spec['id']}.md"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(result.output_text)
+        return result.output_text
+
     prior = load_prior_outputs(project_path, task_spec.get("dependencies", []))
     conventions = (project_path / "conventions.md").read_text()
     verification = _verification_text(task_spec["verification_criteria"])
+    project_spec_context = _project_spec_context(project_path)
     
     user_content = f"""
 TASK ID: {task_spec['id']}
@@ -45,6 +56,9 @@ COMPLEXITY: {task_spec['complexity']}
 
 CONVENTIONS:
 {conventions}
+
+PROJECT SPEC:
+{project_spec_context}
 
 PRIOR OUTPUTS:
 {prior if prior else 'No prior outputs (this is a foundational task)'}
@@ -186,6 +200,26 @@ def requires_artifacts(task_spec: dict) -> bool:
     text = " ".join(task_spec.get("verification_criteria", []) + [task_spec.get("description", "")]).lower()
     keywords = ["dataset", "data points", "csv", "figure", "plot", "png", "regression", "analysis", "artifact"]
     return any(keyword in text for keyword in keywords)
+
+
+def should_use_worker(task_spec: dict, project_path: Path) -> bool:
+    text = " ".join(task_spec.get("verification_criteria", []) + [task_spec.get("description", "")]).lower()
+    worker_keywords = [
+        "api", "catalog", "database", "http", "download", "fetch", "discover", "workflow",
+        "dataset", "figure", "plot", "analyze", "analysis", "artifact", "external",
+    ]
+    if any(keyword in text for keyword in worker_keywords):
+        return True
+    spec_path = project_path / "project_spec.md"
+    return spec_path.exists()
+
+
+def _project_spec_context(project_path: Path) -> str:
+    spec_path = project_path / "project_spec.md"
+    if not spec_path.exists():
+        return "No project spec file available."
+    spec = parse_project_spec(spec_path)
+    return project_spec_to_context(spec)
 
 
 def _verification_text(criteria: list[str]) -> str:

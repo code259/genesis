@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import sys
 import json
+import os
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from core.executor import artifact_paths_for_task, execute_task  # pyre-ignore[21]
 from core.manuscript_builder import build_paper_package, build_stage_summary  # pyre-ignore[21]
 from core.oracle_manager import oracle_result_to_dict, run_oracle_checks  # pyre-ignore[21]
+from core.research_worker import mark_task_verified  # pyre-ignore[21]
+from core.status_manager import update_run_state, write_dashboard, write_project_status  # pyre-ignore[21]
 from core.supervisor import evaluate_output, Decision  # pyre-ignore[21]
 from core.verifier import verify  # pyre-ignore[21]
 from core.state_manager import update_global_state, check_stage_gate  # pyre-ignore[21]
@@ -17,8 +20,19 @@ def run_stage(project_id: str, stage: int, task_specs: list | None = None):
     project_path = Path("projects") / project_id
     stage_dir = project_path / "stages" / f"stage_{stage}"
     stage_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["GENESIS_RUNTIME_DIR"] = str(project_path / "runtime")
     if task_specs is None:
         task_specs = _load_stage_tasks(project_path, stage)
+    update_run_state(
+        project_path,
+        current_stage=stage,
+        phase="running_stage",
+        awaiting_human_review=False,
+        next_human_action=None,
+        last_successful_action=f"Started stage {stage}",
+    )
+    write_project_status(project_path)
+    write_dashboard(project_path)
     
     error_counts = {}
     
@@ -41,6 +55,8 @@ def run_stage(project_id: str, stage: int, task_specs: list | None = None):
             )
             verification = verify(spec, output, oracle_result=oracle_result, is_foundational=is_foundational)
             _write_verification_artifacts(stage_dir, spec["id"], verification)
+            write_project_status(project_path)
+            write_dashboard(project_path)
             
             print(f"Supervisor decision: {decision.decision.value}")
             for reason in decision.reasons:
@@ -56,14 +72,27 @@ def run_stage(project_id: str, stage: int, task_specs: list | None = None):
 
             if verification["status"] == "ACCEPT" and oracle_result["oracle_pass"] is not False:
                 print(f"✓ {spec['id']} accepted")
+                mark_task_verified(project_path, spec["id"], "ACCEPT")
                 update_global_state(project_path, spec['id'], output[:300], "ESTABLISHED")
+                update_run_state(project_path, last_successful_action=f"Accepted {spec['id']}")
+                write_project_status(project_path)
+                write_dashboard(project_path)
                 break
             else:
                 print(f"✗ {spec['id']} requires revision. Attempt {attempt+1}/{max_attempts}")
                 error_counts[spec['id']] = attempt + 1
                 revision_context = verification["raw_text"]
                 if attempt + 1 >= max_attempts:
+                    mark_task_verified(project_path, spec["id"], "ESCALATE")
                     _write_escalation(stage_dir, spec["id"], verification["raw_text"], attempt + 1)
+                    update_run_state(
+                        project_path,
+                        phase="blocked",
+                        next_human_action=f"Review escalation for {spec['id']}",
+                        last_successful_action=f"Escalated {spec['id']}",
+                    )
+                    write_project_status(project_path)
+                    write_dashboard(project_path)
                     input("Human: review escalation file and press Enter to continue...")
                     break
         
@@ -75,11 +104,29 @@ def run_stage(project_id: str, stage: int, task_specs: list | None = None):
     if gate['can_close']:
         summary_path = build_stage_summary(project_path, stage)
         paper_path = build_paper_package(project_path)
+        update_run_state(
+            project_path,
+            phase="awaiting_human_review",
+            awaiting_human_review=True,
+            next_human_action=f"Review stage {stage} summary and paper package",
+            last_successful_action=f"Closed stage {stage}",
+        )
+        write_project_status(project_path)
+        write_dashboard(project_path)
         print(f"✓ Stage {stage} closed successfully")
         print(f"Stage summary written to: {summary_path}")
         print(f"Paper package updated at: {paper_path}")
         input("Human checkpoint: review the stage summary and paper package, then press Enter to continue...")
     else:
+        update_run_state(
+            project_path,
+            phase="blocked",
+            awaiting_human_review=False,
+            next_human_action=f"Resolve blocking items for stage {stage}",
+            last_successful_action=f"Stage {stage} blocked",
+        )
+        write_project_status(project_path)
+        write_dashboard(project_path)
         print(f"⛔ Stage {stage} blocked:")
         for item in gate['blocking_items']:
             print(f"  - {item}")

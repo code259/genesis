@@ -2,28 +2,55 @@ from __future__ import annotations
 
 import sys
 import json
+import os
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from core.decomposer import decompose, adversarial_review  # pyre-ignore[21]
+from core.project_spec import legacy_project_spec_markdown, normalize_project_spec, parse_project_spec, project_spec_to_context, validate_project_spec  # pyre-ignore[21]
+from core.status_manager import update_run_state, write_dashboard, write_project_status  # pyre-ignore[21]
 from core.task_parser import build_dependency_graph, parse_task_tree, validate_task_tree  # pyre-ignore[21]
 import uuid
 
+
+def _write_temp_spec(project_path: Path, content: str) -> Path:
+    temp_path = project_path / "_legacy_project_spec.md"
+    temp_path.write_text(content)
+    return temp_path
+
 def new_project(
-    research_goal: str,
-    domain_context: str,
+    research_goal: str | None = None,
+    domain_context: str | None = None,
     domain: str = "general",
     oracle_module: str | None = None,
+    spec_path: str | None = None,
 ):
     full_uuid = str(uuid.uuid4())
     project_id = "".join(full_uuid[i] for i in range(8))
     project_path = Path("projects") / project_id
     project_path.mkdir(parents=True, exist_ok=True)
+    os.environ["GENESIS_RUNTIME_DIR"] = str(project_path / "runtime")
     
     # Initialize files
     (project_path / "conventions.md").write_text("# Conventions\n\n*To be populated as conventions are established.*\n")
     (project_path / "global_state.md").write_text("# Global State\n\n")
     (project_path / "constraints.md").write_text(Path("prompts/constraints.md").read_text())
+
+    if spec_path is not None:
+        parsed_spec = parse_project_spec(spec_path)
+        spec_errors = validate_project_spec(parsed_spec)
+        if spec_errors:
+            raise ValueError("Project spec is invalid:\n" + "\n".join(spec_errors))
+        normalized_spec = normalize_project_spec(parsed_spec)
+        project_spec_markdown = Path(spec_path).read_text()
+        research_goal = normalized_spec["research_goal"]
+        domain_context = project_spec_to_context(parsed_spec)
+    else:
+        if research_goal is None or domain_context is None:
+            raise ValueError("Either spec_path or both research_goal and domain_context are required")
+        project_spec_markdown = legacy_project_spec_markdown(research_goal, domain_context, domain=domain)
+        parsed_spec = parse_project_spec(_write_temp_spec(project_path, project_spec_markdown))
+        normalized_spec = normalize_project_spec(parsed_spec)
     
     # Decompose
     print("Decomposing research goal...")
@@ -41,6 +68,7 @@ def new_project(
         oracle_module = "astro"
     
     # Save both
+    (project_path / "project_spec.md").write_text(project_spec_markdown)
     (project_path / "master_plan.md").write_text(task_tree)
     (project_path / "decomposition_review.md").write_text(review)
     (project_path / "tasks.json").write_text(json.dumps(tasks, indent=2))
@@ -48,14 +76,24 @@ def new_project(
     (project_path / "project_config.json").write_text(
         json.dumps(
             {
-                "title": research_goal,
+                "title": normalized_spec["title"],
                 "domain": domain,
                 "oracle_module": oracle_module,
                 "paper": {"manual_refs_only": True},
+                "project_spec": normalized_spec,
             },
             indent=2,
         )
     )
+    update_run_state(
+        project_path,
+        phase="initialized",
+        awaiting_human_review=True,
+        next_human_action="Review decomposition and decomposition review before stage execution",
+        last_successful_action="Project initialized",
+    )
+    write_project_status(project_path)
+    write_dashboard(project_path)
     
     print(f"\nProject initialized: {project_id}")
     print(f"Review decomposition at: projects/{project_id}/master_plan.md")
