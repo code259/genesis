@@ -7,27 +7,30 @@ import config  # type: ignore
 TIERS = {
     0: {
         # Ollama local — OpenAI-compatible endpoint, no key needed
-        "supervisor":   {"provider": "ollama", "model": "llama3.1:8b"},
-        "executor":     {"provider": "ollama", "model": "llama3.1:8b"},
-        "verifier":     {"provider": "ollama", "model": "llama3.1:8b"},
-        "cross_check":  {"provider": "ollama", "model": "mistral:7b"},
-        "decomposer":   {"provider": "ollama", "model": "llama3.1:8b"},
+        "supervisor":            {"provider": "ollama", "model": "llama3.1:8b"},
+        "executor":              {"provider": "ollama", "model": "llama3.1:8b"},
+        "verifier":              {"provider": "ollama", "model": "llama3.1:8b"},
+        "cross_check":           {"provider": "ollama", "model": "mistral:7b"},
+        "decomposer":            {"provider": "ollama", "model": "llama3.1:8b"},
+        "decomposition_reviewer": {"provider": "ollama", "model": "mistral:7b"},
     },
     1: {
         # Cheap cloud — Groq for primary work, OpenAI for cross-provider checks
-        "supervisor":   {"provider": "groq",   "model": "llama-3.1-8b-instant"},
-        "executor":     {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
-        "verifier":     {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
-        "cross_check":  {"provider": "openai", "model": "gpt-4o-mini"},
-        "decomposer":   {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
+        "supervisor":            {"provider": "groq",   "model": "llama-3.1-8b-instant"},
+        "executor":              {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
+        "verifier":              {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
+        "cross_check":           {"provider": "openai", "model": "gpt-4o-mini"},
+        "decomposer":            {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
+        "decomposition_reviewer": {"provider": "groq", "model": "deepseek-r1-distill-llama-70b"},
     },
     2: {
         # Production — Anthropic + OpenAI
-        "supervisor":   {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
-        "executor":     {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-        "verifier":     {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-        "cross_check":  {"provider": "openai",    "model": "gpt-4o"},
-        "decomposer":   {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+        "supervisor":            {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+        "executor":              {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+        "verifier":              {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+        "cross_check":           {"provider": "openai",    "model": "gpt-4o"},
+        "decomposer":            {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+        "decomposition_reviewer": {"provider": "openai", "model": "gpt-4o-mini"},
     },
 }
 
@@ -36,7 +39,7 @@ def _resolve_spec(active_tier: int, role: str) -> dict[str, str]:
     spec = dict(TIERS[active_tier][role])
 
     # Tier 1 should still work when only a Groq key is configured.
-    if active_tier == 1 and role == "cross_check" and spec["provider"] == "openai":
+    if active_tier == 1 and role in {"cross_check", "decomposition_reviewer"} and spec["provider"] == "openai":
         if not config.OPENAI_KEY and config.GROQ_KEY:
             return {"provider": "groq", "model": "deepseek-r1-distill-llama-70b"}
 
@@ -90,7 +93,7 @@ def call(
     """
     Single entry point for all model calls.
 
-    role: one of 'supervisor', 'executor', 'verifier', 'cross_check', 'decomposer'
+    role: one of 'supervisor', 'executor', 'verifier', 'cross_check', 'decomposer', 'decomposition_reviewer'
     system: system prompt string
     user: user message string
     max_tokens: override default if needed
@@ -112,6 +115,7 @@ def call(
             "verifier":    config.MAX_TOKENS_VERIFIER,
             "cross_check": config.MAX_TOKENS_VERIFIER,
             "decomposer":  config.MAX_TOKENS_EXECUTOR,
+            "decomposition_reviewer": config.MAX_TOKENS_VERIFIER,
         }.get(role, 2000)
 
     try:
@@ -149,6 +153,7 @@ def current_tier_summary() -> str:
     """Print active model assignments. Call at project init for audit trail."""
     tier = config.MODEL_TIER
     lines = [f"Active tier: {tier}"]
-    for role, spec in TIERS[tier].items():
+    for role in TIERS[tier]:
+        spec = _resolve_spec(tier, role)
         lines.append(f"  {role:12s} → {spec['provider']:10s} / {spec['model']}")
     return "\n".join(lines)

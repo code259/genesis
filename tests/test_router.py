@@ -18,6 +18,10 @@ def test_tier_1_cross_check_uses_openai():
     assert router.TIERS[1]["cross_check"]["provider"] == "openai"
 
 
+def test_tier_1_decomposition_reviewer_uses_distinct_role():
+    assert "decomposition_reviewer" in router.TIERS[1]
+
+
 def test_groq_client_uses_openai_compatible_base_url(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(config, "GROQ_KEY", "test-groq-key")
     client = router._get_client("groq")

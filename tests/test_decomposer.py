@@ -47,6 +47,6 @@ def test_adversarial_review_runs(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(decomposer.router, "call", fake_call)
     review = decomposer.adversarial_review(GOAL, "S1T1")
     assert review == '{"review": "ok"}'
-    assert captured["role"] == "decomposer"
+    assert captured["role"] == "decomposition_reviewer"
     assert "Research goal:" in captured["user"]
     assert "Proposed task tree:" in captured["user"]
