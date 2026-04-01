@@ -34,6 +34,16 @@ def request_log_path() -> Path:
     return runtime_dir() / "request_log.jsonl"
 
 
+def read_request_log(limit: int | None = None) -> list[dict]:
+    path = request_log_path()
+    if not path.exists():
+        return []
+    lines = path.read_text().splitlines()
+    if limit is not None:
+        lines = lines[-limit:]
+    return [json.loads(line) for line in lines if line.strip()]
+
+
 def load_rate_limit_state() -> dict:
     path = rate_limit_state_path()
     if not path.exists():
@@ -119,10 +129,26 @@ def log_request(metadata: dict):
 
 def runtime_summary() -> dict:
     state = load_rate_limit_state()
+    logs = read_request_log()
+    usage_by_role: dict[str, int] = {}
+    usage_by_provider: dict[str, int] = {}
+    key_usage: dict[str, int] = {}
+    token_estimate = 0
+    for entry in logs:
+        usage_by_role[entry.get("role", "unknown")] = usage_by_role.get(entry.get("role", "unknown"), 0) + 1
+        usage_by_provider[entry.get("provider", "unknown")] = usage_by_provider.get(entry.get("provider", "unknown"), 0) + 1
+        if entry.get("key_alias"):
+            key_usage[entry["key_alias"]] = key_usage.get(entry["key_alias"], 0) + 1
+        token_estimate += int(entry.get("max_tokens") or 0)
     return {
         "configured_groq_keys": len(groq_key_entries()),
         "last_error": state.get("last_error"),
         "tracked_models": sum(len(models) for models in state.get("keys", {}).values()),
+        "request_count": len(logs),
+        "estimated_max_tokens": token_estimate,
+        "usage_by_role": usage_by_role,
+        "usage_by_provider": usage_by_provider,
+        "usage_by_key": key_usage,
     }
 
 

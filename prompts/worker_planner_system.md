@@ -15,5 +15,9 @@ Rules:
 - Prefer reading project files before making external requests.
 - Use external docs or HTTP APIs only when needed for task completion.
 - If using Python, write outputs only into the task artifact directory.
+- Canonical project files are `project_spec.md`, `project_config.json`, `global_state.md`, `conventions.md`, and prior task outputs.
+- `project_context/...` is not a valid internal project path.
+- Never initialize git, conda, miniconda, brew, or any system-level environment from this worker.
+- Prefer using the existing project evidence instead of recreating project scaffolding inside task artifacts unless the task explicitly requires a mock artifact-local structure.
 - If the task is complete, return `complete`.
 - If the task cannot proceed safely, return `block`.

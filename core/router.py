@@ -22,7 +22,7 @@ TIERS = {
         "verifier":              {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
         "cross_check":           {"provider": "openai", "model": "gpt-4o-mini"},
         "decomposer":            {"provider": "groq",   "model": "llama-3.3-70b-versatile"},
-        "decomposition_reviewer": {"provider": "groq", "model": "deepseek-r1-distill-llama-70b"},
+        "decomposition_reviewer": {"provider": "groq", "model": "openai/gpt-oss-120b"},
     },
     2: {
         # Production — Anthropic + OpenAI
@@ -52,7 +52,7 @@ def _resolve_spec(active_tier: int, role: str) -> dict[str, str]:
     # Tier 1 should still work when only a Groq key is configured.
     if active_tier == 1 and role in {"cross_check", "decomposition_reviewer"} and spec["provider"] == "openai":
         if not config.OPENAI_KEY and config.GROQ_KEY:
-            return {"provider": "groq", "model": "deepseek-r1-distill-llama-70b"}
+            return {"provider": "groq", "model": "openai/gpt-oss-120b"}
 
     return spec
 

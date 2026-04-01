@@ -18,6 +18,10 @@ def _write_temp_spec(project_path: Path, content: str) -> Path:
     temp_path.write_text(content)
     return temp_path
 
+
+def _skip_human_checkpoints() -> bool:
+    return os.getenv("GENESIS_SKIP_HUMAN_CHECKPOINTS", "").lower() in {"1", "true", "yes", "on"}
+
 def new_project(
     research_goal: str | None = None,
     domain_context: str | None = None,
@@ -88,8 +92,12 @@ def new_project(
     update_run_state(
         project_path,
         phase="initialized",
-        awaiting_human_review=True,
-        next_human_action="Review decomposition and decomposition review before stage execution",
+        awaiting_human_review=not _skip_human_checkpoints(),
+        next_human_action=(
+            None
+            if _skip_human_checkpoints()
+            else "Review decomposition and decomposition review before stage execution"
+        ),
         last_successful_action="Project initialized",
     )
     write_project_status(project_path)
@@ -98,7 +106,10 @@ def new_project(
     print(f"\nProject initialized: {project_id}")
     print(f"Review decomposition at: projects/{project_id}/master_plan.md")
     print(f"Adversarial review at: projects/{project_id}/decomposition_review.md")
-    print("\n⚠️  Human checkpoint: Review both files before proceeding to execution.")
+    if _skip_human_checkpoints():
+        print("\nTest mode: human checkpoint bypassed for initialization.")
+    else:
+        print("\n⚠️  Human checkpoint: Review both files before proceeding to execution.")
     
     return project_id
 

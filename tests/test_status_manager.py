@@ -31,3 +31,24 @@ def test_status_manager_builds_status_and_dashboard(tmp_path: Path):
     assert status["next_required_human_action"] == "Provide API key"
     assert status_path.exists()
     assert dashboard_path.exists()
+
+
+def test_status_manager_escalation_overrides_revise(tmp_path: Path):
+    project_path = tmp_path / "project"
+    stage_dir = project_path / "stages" / "stage_1"
+    worker_dir = stage_dir / "S1T1_worker"
+    worker_dir.mkdir(parents=True)
+    (project_path / "project_config.json").write_text(json.dumps({"title": "Demo", "domain": "general"}))
+    (project_path / "tasks.json").write_text(
+        json.dumps(
+            [
+                {"id": "S1T1", "description": "Task", "stage": 1, "verification_criteria": ["exists"], "dependencies": [], "complexity": "STANDARD", "foundational": False}
+            ]
+        )
+    )
+    (stage_dir / "S1T1_verify.json").write_text(json.dumps({"status": "REVISE"}))
+    (stage_dir / "S1T1_escalation.md").write_text("ESCALATION")
+
+    status = build_project_status(project_path)
+
+    assert status["tasks"][0]["status"] == "ESCALATED"

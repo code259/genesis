@@ -38,4 +38,4 @@ def test_tier_1_cross_check_falls_back_to_groq_without_openai_key(monkeypatch: p
     monkeypatch.setattr(config, "GROQ_KEY", "test-groq-key")
     spec = router._resolve_spec(1, "cross_check")
     assert spec["provider"] == "groq"
-    assert spec["model"] == "deepseek-r1-distill-llama-70b"
+    assert spec["model"] == "openai/gpt-oss-120b"
