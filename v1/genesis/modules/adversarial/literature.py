@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 import requests
@@ -26,7 +28,8 @@ class LiteratureCrossExaminer:
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
         self.api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
-        cache_path = os.getenv("GENESIS_CITATIONS_CACHE", "taste_db/literature_cache.json")
+        cache_root = Path(os.getenv("GENESIS_CACHE_ROOT", Path(tempfile.gettempdir()) / "genesis-cache"))
+        cache_path = os.getenv("GENESIS_CITATIONS_CACHE", str(cache_root / "literature_cache.json"))
         self.client = ScholarlyClient(
             cache_path=cache_path,
             session=self.session,
