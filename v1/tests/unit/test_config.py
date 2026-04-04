@@ -70,4 +70,4 @@ def test_dependency_manifest_tracks_required_spec_groups():
     assert '"alembic>=1.13"' in pyproject
     assert '"bibtexparser>=1.4,<2"' in pyproject
     assert '"numpy>=1.26,<2"' in pyproject
-    assert '"torch>=2.4"' in pyproject
+    assert '"gpytorch>=1.11; platform_system != \'Darwin\' or platform_machine != \'x86_64\'"' in pyproject

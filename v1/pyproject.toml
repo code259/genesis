@@ -26,9 +26,12 @@ dev = [
 ml = [
   "numpy>=1.26,<2",
   "scipy>=1.11",
-  "torch>=2.4",
-  "sentence-transformers>=3.0",
-  "torch-geometric>=2.5",
+]
+ml-accelerated = [
+  "torch>=2.4; platform_system != 'Darwin' or platform_machine != 'x86_64'",
+  "sentence-transformers>=3.0; platform_system != 'Darwin' or platform_machine != 'x86_64'",
+  "torch-geometric>=2.5; platform_system != 'Darwin' or platform_machine != 'x86_64'",
+  "gpytorch>=1.11; platform_system != 'Darwin' or platform_machine != 'x86_64'",
 ]
 data = [
   "alembic>=1.13",
@@ -47,7 +50,7 @@ domain = [
   "astropy>=6.0",
 ]
 all = [
-  "genesis-v1[dev,ml,data,verification,paper,domain]",
+  "genesis-v1[dev,ml,ml-accelerated,data,verification,paper,domain]",
 ]
 
 [project.scripts]

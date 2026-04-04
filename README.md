@@ -50,7 +50,8 @@ python -m genesis.cli.main --help
 
 Additional optional dependency groups are available for heavier local runs:
 
-- `ml` — embeddings, graph/manifold, and model-oriented dependencies
+- `ml` — baseline numeric dependencies used by the taste/optimizer path
+- `ml-accelerated` — optional PyTorch and embedding backends for native environments that support recent wheels
 - `domain` — astrophysics-oriented domain tooling
 
 Example:
@@ -61,11 +62,13 @@ python -m pip install -U pip setuptools wheel
 python -m pip install -e ".[dev,data,verification,paper,ml,domain]"
 ```
 
-If you are installing the `ml` extra in a fresh environment, Genesis currently expects a `NumPy 1.x` stack and a modern `torch` build. If you previously installed an incompatible mix, repair it with:
+For Apple Silicon Macs running an Intel (`x86_64`) conda env, do not install `ml-accelerated`: recent PyTorch pip wheels are not available there, and Genesis already falls back to non-PyTorch implementations for the affected paths.
+
+If you are on a native environment that supports modern PyTorch wheels and want the accelerated stack too:
 
 ```bash
-python -m pip install --upgrade --force-reinstall "numpy<2" "torch>=2.4" "sentence-transformers>=3.0"
-python -m pip install -e ".[dev,data,verification,paper,ml,domain]"
+python -m pip install --upgrade --force-reinstall "numpy<2"
+python -m pip install -e ".[dev,data,verification,paper,ml,ml-accelerated,domain]"
 ```
 
 ## CLI Overview
