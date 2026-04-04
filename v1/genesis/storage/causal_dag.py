@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Union
 
@@ -46,7 +48,27 @@ class CausalDAG:
     def merge_global_dag(self, project_dag: dict[str, Any]) -> None:
         graph = self._load()
         graph["nodes"] = sorted(set(graph["nodes"]) | set(project_dag.get("nodes", [])))
-        graph["edges"].extend(project_dag.get("edges", []))
+        seen = {
+            (
+                edge["source"],
+                edge["target"],
+                edge["effect_size"],
+                edge["confidence"],
+                tuple(edge["experiment_ids"]),
+            )
+            for edge in graph["edges"]
+        }
+        for edge in project_dag.get("edges", []):
+            signature = (
+                edge["source"],
+                edge["target"],
+                edge["effect_size"],
+                edge["confidence"],
+                tuple(edge["experiment_ids"]),
+            )
+            if signature not in seen:
+                graph["edges"].append(edge)
+                seen.add(signature)
         if self._has_cycle(graph):
             raise ValueError("merged DAG is cyclic")
         self._save(graph)
@@ -55,7 +77,10 @@ class CausalDAG:
         return json.loads(self.path.read_text(encoding="utf-8"))
 
     def _save(self, payload: dict[str, Any]) -> None:
-        self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        with tempfile.NamedTemporaryFile("w", delete=False, dir=str(self.path.parent), encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2))
+            temp_name = handle.name
+        os.replace(temp_name, self.path)
 
     def _has_cycle(self, graph: dict[str, Any]) -> bool:
         adjacency: dict[str, list[str]] = {node: [] for node in graph["nodes"]}

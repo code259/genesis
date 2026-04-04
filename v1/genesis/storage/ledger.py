@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Tuple, Union
 
@@ -58,13 +59,7 @@ class ExperimentLedger:
         attribution_ablations: Optional[dict[str, Any]] = None,
         timestamp: str = "",
     ) -> None:
-        summary = {
-            "length": len(result.trajectory),
-            "start": result.trajectory[0] if result.trajectory else None,
-            "end": result.trajectory[-1] if result.trajectory else None,
-            "max": max(result.trajectory, default=None),
-            "min": min(result.trajectory, default=None),
-        }
+        summary = self._summarize_trajectory(result.trajectory)
         with self._connect() as connection:
             connection.execute(
                 """
@@ -86,7 +81,7 @@ class ExperimentLedger:
                     json.dumps(attribution_ablations or {}),
                     result.status,
                     result.anomaly_score,
-                    timestamp,
+                    timestamp or datetime.now(timezone.utc).isoformat(),
                     result.artifact_path,
                     result.trajectory_path,
                 ),
@@ -122,6 +117,8 @@ class ExperimentLedger:
         frontier: list[dict[str, Any]] = []
         for row in rows:
             payload = self._row_to_dict(row)
+            if payload["status"] not in {"keep", "running"}:
+                continue
             metric = payload["primary_metric"]
             anomaly = payload["anomaly_score"]
             if best_metric is None or metric >= best_metric or anomaly < 1.0:
@@ -169,4 +166,18 @@ class ExperimentLedger:
             "timestamp": timestamp,
             "artifact_path": artifact_path,
             "trajectory_path": trajectory_path,
+        }
+
+    def _summarize_trajectory(self, trajectory: list[float]) -> dict[str, Any]:
+        deltas = [
+            round(current - previous, 6)
+            for previous, current in zip(trajectory, trajectory[1:])
+        ]
+        return {
+            "length": len(trajectory),
+            "start": trajectory[0] if trajectory else None,
+            "end": trajectory[-1] if trajectory else None,
+            "max": max(trajectory, default=None),
+            "min": min(trajectory, default=None),
+            "deltas": deltas,
         }
