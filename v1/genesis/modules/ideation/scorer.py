@@ -17,9 +17,15 @@ class IdeaScorer:
         taste_model: TasteGP | None = None,
         taste_prediction: float = 0.5,
     ) -> IdeaScore:
-        novelty = min(1.0, float(idea.metadata.get("density_score", 0.5)) if idea.metadata else 0.5)
-        tractability = 1.0 / max(1.0, len(idea.summary.split()) / 25.0)
-        connection_quality = 1.0 if task_description.lower().split()[0] in idea.summary.lower() else 0.6
+        density_score = float(idea.metadata.get("density_score", 0.5)) if idea.metadata else 0.5
+        novelty = max(0.0, min(1.0, density_score))
+        path_length = int(idea.metadata.get("path_length", 1)) if idea.metadata else 1
+        summary_words = len(idea.summary.split())
+        tractability = max(0.1, 1.0 - min(0.8, summary_words / 80.0) - min(0.3, (path_length - 1) * 0.05))
+        task_tokens = set(task_description.lower().split())
+        idea_tokens = set((idea.title + " " + idea.summary).lower().split())
+        overlap = len(task_tokens & idea_tokens)
+        connection_quality = max(0.2, min(1.0, 0.4 + overlap / max(1, len(task_tokens))))
         if taste_model and taste_model.training_targets:
             proposal_like = self.feature_extractor.extract(
                 ExperimentProposal(
@@ -32,12 +38,12 @@ class IdeaScorer:
                 )
             )
             predicted, _ = taste_model.predict([proposal_like])
-            taste_prediction = predicted[0]
-        composite = 0.35 * novelty + 0.25 * tractability + 0.2 * connection_quality + 0.2 * taste_prediction
+            taste_prediction = max(0.0, min(1.0, predicted[0]))
+        composite = 0.35 * novelty + 0.25 * connection_quality + 0.2 * tractability + 0.2 * taste_prediction
         return IdeaScore(
-            novelty=novelty,
-            tractability=tractability,
-            connection_quality=connection_quality,
-            taste_prediction=taste_prediction,
-            composite_score=composite,
+            novelty=round(novelty, 6),
+            tractability=round(tractability, 6),
+            connection_quality=round(connection_quality, 6),
+            taste_prediction=round(taste_prediction, 6),
+            composite_score=round(composite, 6),
         )

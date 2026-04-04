@@ -33,7 +33,7 @@ class IdeationOrchestrator:
         taste_model: TasteGP | None = None,
     ) -> list[ScoredIdea]:
         ideas = self.greedy.search(task_description, k=3)
-        if not ideas and n_failed_iterations >= 5:
+        if n_failed_iterations >= 5:
             ideas.append(self.pollination.propose_pollination(task_description))
         if n_failed_iterations >= 5:
             ideas.extend(
@@ -41,10 +41,17 @@ class IdeationOrchestrator:
                     task_description, self.low_density.find_low_density_points()
                 )
             )
-        return [
+        scored = [
             ScoredIdea(
                 idea=idea,
                 score=self.scorer.score(idea, task_description, taste_model=taste_model),
             )
             for idea in ideas
         ]
+        deduped: dict[tuple[str, str], ScoredIdea] = {}
+        for candidate in scored:
+            key = (candidate.idea.source, candidate.idea.title)
+            existing = deduped.get(key)
+            if existing is None or candidate.score.composite_score > existing.score.composite_score:
+                deduped[key] = candidate
+        return sorted(deduped.values(), key=lambda item: item.score.composite_score, reverse=True)
