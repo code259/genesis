@@ -86,6 +86,7 @@ def test_feature_extractor_gp_and_persistence_shape(tmp_path):
     proposals = [_proposal(f"experiment {index}", 0.3 + index * 0.05) for index in range(4)]
     features = [extractor.extract(proposal) for proposal in proposals]
     assert len(features[0]) > 90
+    assert features[0] == extractor.extract(proposals[0])
 
     model = TasteGP()
     model.fit(features[:2], [proposal.expected_metric for proposal in proposals[:2]], [proposal.expected_trajectory for proposal in proposals[:2]])

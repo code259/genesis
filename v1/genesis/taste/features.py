@@ -3,13 +3,15 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from functools import lru_cache
 
 from genesis.models import ExperimentProposal
 
 
 class ExperimentFeatureExtractor:
-    def __init__(self, embedding_dim: int = 96):
+    def __init__(self, embedding_dim: int = 96, model_name: str = "sentence-transformers/all-mpnet-base-v2"):
         self.embedding_dim = embedding_dim
+        self.model_name = model_name
 
     def extract(self, proposal: ExperimentProposal) -> list[float]:
         embedding = self._text_embedding(f"{proposal.description} {proposal.code_diff}")
@@ -30,6 +32,9 @@ class ExperimentFeatureExtractor:
         return embedding + structured
 
     def _text_embedding(self, text: str) -> list[float]:
+        semantic = self._semantic_embedding(text)
+        if semantic is not None:
+            return semantic
         vector = [0.0 for _ in range(self.embedding_dim)]
         tokens = re.findall(r"[a-z0-9_]{2,}", text.lower())
         if not tokens:
@@ -43,3 +48,25 @@ class ExperimentFeatureExtractor:
         if norm == 0.0:
             return vector
         return [round(value / norm, 6) for value in vector]
+
+    @lru_cache(maxsize=1)
+    def _load_encoder(self):
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            return SentenceTransformer(self.model_name)
+        except Exception:
+            return None
+
+    def _semantic_embedding(self, text: str) -> list[float] | None:
+        encoder = self._load_encoder()
+        if encoder is None:
+            return None
+        try:
+            vector = encoder.encode(text, normalize_embeddings=True)
+        except Exception:
+            return None
+        values = [float(value) for value in vector[: self.embedding_dim]]
+        if len(values) < self.embedding_dim:
+            values.extend([0.0] * (self.embedding_dim - len(values)))
+        return [round(value, 6) for value in values]
