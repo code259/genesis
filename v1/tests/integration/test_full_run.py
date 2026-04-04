@@ -27,3 +27,27 @@ def test_full_run(tmp_path, monkeypatch):
     result = runner.invoke(main, ["run", "--project-id", "demo1234", "--spec", str(spec_path)])
     assert result.exit_code == 0, result.output
     assert "demo1234" in result.output
+
+
+def test_init_and_status_commands(tmp_path, monkeypatch):
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(
+        json.dumps(
+            {
+                "research_question": "Does init create a project?",
+                "domain": "general",
+                "success_criteria": ["Does init create a project?"],
+                "oracle_hints": [],
+                "compute_budget": "local_cpu",
+                "time_budget_hours": 1,
+                "domain_knowledge_model": "none",
+                "output_dir": str(tmp_path / "projects"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    init_result = runner.invoke(main, ["init", "--project-id", "initdemo", "--spec", str(spec_path)])
+    assert init_result.exit_code == 0, init_result.output
+    assert (tmp_path / "projects" / "initdemo" / "spec.json").exists()

@@ -8,13 +8,18 @@ from genesis.config import ProjectConfig
 class DomainOracleGenerator:
     def generate(self, project_config: ProjectConfig) -> str:
         hints = project_config.oracle_hints or ["No explicit oracle hints provided."]
-        joined_hints = "\\n".join(f"    warnings.append({hint!r})" for hint in hints)
+        joined_hints = "\n".join(f"    warnings.append({hint!r})" for hint in hints)
         return dedent(
             f"""
             def run_all_checks(outputs_dir: str):
+                from pathlib import Path
+
                 failures = []
                 warnings = []
-            {joined_hints if joined_hints else "    pass"}
+                outputs = Path(outputs_dir)
+                if not outputs.exists():
+                    failures.append("outputs_dir_missing")
+                {joined_hints if joined_hints else "pass"}
                 return {{
                     "pass_rate": 1.0 if not failures else 0.0,
                     "failures": failures,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -19,7 +20,8 @@ def main() -> None:
 @main.command("init")
 @click.option("--spec", "spec_path", type=click.Path(exists=True, path_type=Path))
 @click.option("--interactive", is_flag=True, default=False)
-def init_project(spec_path: Optional[Path], interactive: bool) -> None:
+@click.option("--project-id", required=False)
+def init_project(spec_path: Optional[Path], interactive: bool, project_id: Optional[str]) -> None:
     if interactive:
         payload = {
             "research_question": click.prompt("Research question"),
@@ -31,12 +33,20 @@ def init_project(spec_path: Optional[Path], interactive: bool) -> None:
             "domain_knowledge_model": click.prompt("Domain knowledge model", default="none"),
             "output_dir": "projects",
         }
-        click.echo(json.dumps(payload, indent=2))
+        project_id = project_id or uuid.uuid4().hex[:8]
+        project_dir = Path(payload["output_dir"]) / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "spec.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        click.echo(str(project_dir))
         return
     if not spec_path:
         raise click.UsageError("Provide --spec or --interactive")
     config = load_project_config(spec_path)
-    click.echo(json.dumps(config.to_dict(), indent=2))
+    project_id = project_id or uuid.uuid4().hex[:8]
+    project_dir = Path(config.output_dir) / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "spec.json").write_text(json.dumps(config.to_dict(), indent=2), encoding="utf-8")
+    click.echo(str(project_dir))
 
 
 @main.command("run")
@@ -45,23 +55,35 @@ def init_project(spec_path: Optional[Path], interactive: bool) -> None:
 def run_project(project_id: Optional[str], spec_path: Path) -> None:
     config = load_project_config(spec_path)
     project_id = project_id or uuid.uuid4().hex[:8]
-    loop = MetaHarnessLoop(projects_root=Path(config.output_dir), taste_root=Path("taste_db"))
+    output_root = Path(config.output_dir)
+    loop = MetaHarnessLoop(projects_root=output_root, taste_root=output_root.parent / "taste_db")
     result = loop.run(project_id, config)
     click.echo(json.dumps(result.to_dict(), indent=2))
 
 
 @main.command("status")
 @click.option("--project-id", required=True)
-def status_project(project_id: str) -> None:
-    project_dir = Path("projects") / project_id
-    click.echo("exists" if project_dir.exists() else "missing")
+@click.option("--root", "root_dir", type=click.Path(path_type=Path), default=Path("projects"))
+def status_project(project_id: str, root_dir: Path) -> None:
+    project_dir = root_dir / project_id
+    if not project_dir.exists():
+        click.echo("missing")
+        return
+    payload = {
+        "project_id": project_id,
+        "runs": len(list((project_dir / "runs").glob("*"))),
+        "has_halt": (project_dir / "HALT.json").exists(),
+        "has_paper": (project_dir / "outputs" / "paper" / "main.tex").exists(),
+    }
+    click.echo(json.dumps(payload, indent=2))
 
 
 @main.command("intervene")
 @click.option("--project-id", required=True)
 @click.option("--type", "intervention_type", required=True)
-def intervene(project_id: str, intervention_type: str) -> None:
-    intervention_path = Path("projects") / project_id / "human_intervention.json"
+@click.option("--root", "root_dir", type=click.Path(path_type=Path), default=Path("projects"))
+def intervene(project_id: str, intervention_type: str, root_dir: Path) -> None:
+    intervention_path = root_dir / project_id / "human_intervention.json"
     intervention_path.parent.mkdir(parents=True, exist_ok=True)
     intervention_path.write_text(json.dumps({"type": intervention_type}, indent=2), encoding="utf-8")
     click.echo(str(intervention_path))
@@ -69,21 +91,41 @@ def intervene(project_id: str, intervention_type: str) -> None:
 
 @main.command("results")
 @click.option("--project-id", required=True)
-def results(project_id: str) -> None:
-    project_dir = Path("projects") / project_id / "outputs"
-    click.echo(str(project_dir))
+@click.option("--root", "root_dir", type=click.Path(path_type=Path), default=Path("projects"))
+def results(project_id: str, root_dir: Path) -> None:
+    project_dir = root_dir / project_id / "outputs"
+    payload = {
+        "paper_dir": str(project_dir / "paper"),
+        "code_dir": str(project_dir / "code"),
+    }
+    click.echo(json.dumps(payload, indent=2))
 
 
 @main.command("build-manifold")
 @click.option("--domain", required=True)
 def build_manifold(domain: str) -> None:
-    click.echo(f"build manifold for {domain}")
+    result = subprocess.run(
+        ["python3", "scripts/build_manifold.py"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise click.ClickException(result.stderr.strip() or "build_manifold failed")
+    click.echo(result.stdout.strip() or f"build manifold for {domain}")
 
 
 @main.command("init-taste")
 def init_taste() -> None:
-    Path("taste_db").mkdir(exist_ok=True)
-    click.echo("taste_db initialized")
+    result = subprocess.run(
+        ["python3", "scripts/init_taste.py"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise click.ClickException(result.stderr.strip() or "init_taste failed")
+    click.echo(result.stdout.strip() or "taste_db initialized")
 
 
 if __name__ == "__main__":
