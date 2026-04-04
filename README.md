@@ -13,6 +13,47 @@ The core insight: current LLMs fail at long research tasks not because they lack
 
 ---
 
+## Getting Started
+
+### Prerequisites
+
+- Python 3.9+
+- Provide an API key from Groq, Anthropic, OpenAI, Together AI, or Google if using cloud models (Tier 1/2). Local models (Tier 0) run locally and require no keys like Ollama.
+
+### Setup Instructions
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/your-username/genesis.git
+   cd genesis
+   ```
+
+2. **Set up a virtual environment (recommended):**
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Configure environment variables:**
+   - Copy the example environment file:
+     ```bash
+     cp .env.example .env
+     ```
+   - Open the `.env` file and insert your API keys.
+   - For the default cloud path, set `MODEL_TIER=1` and provide `GROQ_API_KEY` plus `OPENAI_API_KEY`.
+
+5. **Run tests to verify the setup:**
+   ```bash
+   pytest
+   ```
+
+---
+
 ## Inspiration
 
 In December 2025, Harvard physicist Matthew Schwartz guided Claude Opus 4.5 through a complete theoretical physics calculation — producing a genuine contribution to quantum field theory in two weeks rather than the typical one to two years. He used no autonomous AI pipeline. Instead, he built, largely by intuition, a structured workflow: hierarchical task trees, cross-model adversarial verification, explicit anti-hallucination constraints, and stage-gated progression.

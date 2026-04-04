@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-from core.decomposer import decompose, adversarial_review  # pyre-ignore[21]
+from core import decomposer  # pyre-ignore[21]
 
 GOAL = """
 Develop a statistical correction method for batch effects in single-cell RNA-seq 
@@ -19,13 +19,34 @@ Key concern: batch effects confound trajectory topology. Current methods apply
 correction before trajectory inference without formal justification.
 """
 
-def test_decompose_produces_tasks():
-    tree = decompose(GOAL, DOMAIN)
+def test_decompose_produces_tasks(monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    def fake_call(role, system, user, max_tokens=None, tier=None):
+        captured["role"] = role
+        captured["system"] = system
+        captured["user"] = user
+        return "S1T1\nVerification criteria"
+
+    monkeypatch.setattr(decomposer.router, "call", fake_call)
+    tree = decomposer.decompose(GOAL, DOMAIN)
     assert "S1T1" in tree
     assert "Verification criteria" in tree
-    print(tree)
+    assert captured["role"] == "decomposer"
+    assert "Research goal:" in captured["user"]
 
-def test_adversarial_review_runs():
-    tree = decompose(GOAL, DOMAIN)
-    review = adversarial_review(tree, GOAL)
-    print(review)
+def test_adversarial_review_runs(monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    def fake_call(role, system, user, max_tokens=None, tier=None):
+        captured["role"] = role
+        captured["system"] = system
+        captured["user"] = user
+        return '{"review": "ok"}'
+
+    monkeypatch.setattr(decomposer.router, "call", fake_call)
+    review = decomposer.adversarial_review(GOAL, "S1T1")
+    assert review == '{"review": "ok"}'
+    assert captured["role"] == "decomposition_reviewer"
+    assert "Research goal:" in captured["user"]
+    assert "Proposed task tree:" in captured["user"]

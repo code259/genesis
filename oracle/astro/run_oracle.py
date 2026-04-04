@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from oracle.astro import physical_checks, statistical_checks  # pyre-ignore[21]
+from core.task_parser import extract_stage
 
 def run_all_checks(checks: list) -> dict:
     """
@@ -29,7 +30,7 @@ def run_all_checks(checks: list) -> dict:
     }
 
 def write_oracle_report(project_path: Path, task_id: str, results: dict):
-    stage = task_id[1]
+    stage = extract_stage(task_id)
     oracle_dir = project_path / "stages" / f"stage_{stage}" / "oracle"
     oracle_dir.mkdir(parents=True, exist_ok=True)
     report_path = oracle_dir / f"{task_id}_oracle.json"

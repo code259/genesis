@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime
+import json
 
 def update_global_state(project_path: Path, task_id: str, 
                          result_summary: str, status: str):
@@ -55,13 +56,17 @@ def check_stage_gate(project_path: Path, stage: int, task_specs: list) -> dict:
         if "INCOMPLETE" in output:
             blocking.append(f"{spec['id']}: contains INCOMPLETE markers")
         
-        # Check 3: verifier sign-off exists
-        verify_file = stage_dir / f"{spec['id']}_verify.md"
+        # Check 3: verifier sign-off exists and accepts
+        verify_file = stage_dir / f"{spec['id']}_verify.json"
         if not verify_file.exists():
             blocking.append(f"{spec['id']}: no verifier sign-off")
-        elif "RECOMMENDATION: REVISE" in verify_file.read_text():
+            continue
+
+        verification = json.loads(verify_file.read_text())
+        status = verification.get("status")
+        if status == "REVISE":
             blocking.append(f"{spec['id']}: verifier recommends revision")
-        elif "RECOMMENDATION: ESCALATE" in verify_file.read_text():
+        elif status == "ESCALATE":
             blocking.append(f"{spec['id']}: verifier escalated to human")
     
     return {
