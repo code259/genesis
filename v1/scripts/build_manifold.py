@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from genesis.manifold_utils import compute_density, train_graph_vae
 from genesis.scholarly import ScholarlyClient
 from genesis.storage.manifold import ManifoldIndex
+from genesis.taste.features import ExperimentFeatureExtractor
 
 DEFAULT_PAPER_CORPORA = {
     "general": [
@@ -179,12 +180,19 @@ def main() -> None:
 
 
 def hash_vector(paper: dict[str, Any]) -> list[float]:
-    from genesis.manifold_utils import hash_embedding
-
-    return [
-        round(float(value), 6)
-        for value in hash_embedding(f"{paper.get('title', '')} {paper.get('abstract', '')}", dim=64).tolist()
-    ]
+    extractor = ExperimentFeatureExtractor(embedding_dim=64)
+    proposal = type(
+        "PaperProposal",
+        (),
+        {
+            "description": f"{paper.get('title', '')} {paper.get('abstract', '')}",
+            "code_diff": "",
+            "expected_trajectory": [],
+            "compute_budget": "local_cpu",
+            "model_parameter_count": 0,
+        },
+    )()
+    return extractor.extract(proposal)[:64]
 
 
 if __name__ == "__main__":
