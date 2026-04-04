@@ -46,11 +46,13 @@ def test_full_run(tmp_path, monkeypatch):
     )
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
-    result = runner.invoke(main, ["run", "--project-id", "demo1234", "--spec", str(spec_path)])
+    result = runner.invoke(main, ["run", "--project-id", "demo1234", "--spec", str(spec_path), "--max-runs", "2"])
     assert result.exit_code == 0, result.output
-    assert "demo1234" in result.output
     result_json = json.loads(result.output)
     assert result_json["status"] == "complete"
+    paper_dir = tmp_path / "projects" / "demo1234" / "outputs" / "paper"
+    assert (paper_dir / "main.tex").exists()
+    assert (paper_dir / "synthesis_report.json").exists()
 
 
 def test_init_and_status_commands(tmp_path, monkeypatch):
