@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 from genesis.manifold_utils import build_citation_graph, cosine_distance, hash_embedding
 from genesis.models import Idea
 from genesis.storage.manifold import ManifoldIndex
@@ -12,15 +10,10 @@ class PollinationSearch:
         self.manifold = manifold
 
     def sample_distant_point(self, task_embedding: list[float], theta_jump: float = 2.0) -> list[float]:
-        candidates = self.manifold.all_papers()
-        if not candidates:
+        candidate = self.manifold.sample_distant(task_embedding, min_distance=theta_jump, collection="papers")
+        if not candidate:
             return task_embedding
-        ranked = sorted(
-            candidates,
-            key=lambda paper: cosine_distance(task_embedding, paper.get("latent_z", [])),
-            reverse=True,
-        )
-        return ranked[0].get("latent_z", task_embedding)
+        return candidate.get("latent_z", task_embedding)
 
     def find_return_path(self, start: list[float], target: list[float], max_length: int = 6) -> list[list[float]]:
         papers = self.manifold.all_papers()
@@ -46,6 +39,10 @@ class PollinationSearch:
                     graph.nodes[left]["paper"].get("latent_z", []),
                     graph.nodes[right]["paper"].get("latent_z", []),
                 ),
+                weight=lambda left, right, attrs: cosine_distance(
+                    graph.nodes[left]["paper"].get("latent_z", []),
+                    graph.nodes[right]["paper"].get("latent_z", []),
+                ),
             )
         except Exception:  # noqa: BLE001
             return [start, target]
@@ -59,7 +56,7 @@ class PollinationSearch:
         papers = self.manifold.all_papers()
         latent_dim = len(papers[0].get("latent_z", [])) if papers else 32
         seed = hash_embedding(task_description, dim=max(32, latent_dim))[:latent_dim].tolist()
-        landing = self.sample_distant_point(seed)
+        landing = self.sample_distant_point(seed, theta_jump=0.55)
         path = self.find_return_path(landing, seed)
         novelty = cosine_distance(seed, landing)
         return Idea(
@@ -67,5 +64,9 @@ class PollinationSearch:
             summary=f"Novel direction with path length {len(path)} and novelty {novelty:.2f}",
             source="pollination",
             landing_point=landing,
-            metadata={"path": path},
+            metadata={
+                "path": path,
+                "path_length": len(path),
+                "density_score": float(self.manifold.get_density_statistics()["max"] or novelty),
+            },
         )

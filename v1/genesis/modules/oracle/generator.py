@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-import json
+import importlib.util
+from pathlib import Path
+from typing import Any
 
 from genesis.agents.runtime import CodingAgentRuntime, ProviderRuntimeError
 from genesis.config import ProjectConfig
@@ -19,89 +21,154 @@ class DomainOracleGenerator:
                     context=project_config.to_dict(),
                     budget={"max_rules": 6},
                 )
-                generated = self._from_runtime_payload(payload, project_config)
+                generated = self._from_runtime_payload(payload)
                 if generated:
                     return generated
             except ProviderRuntimeError:
                 pass
-        hints = project_config.oracle_hints or ["No explicit oracle hints provided."]
-        domain_specific = {
-            "astrophysics": [
-                "if any(abs(value) > 1e9 for value in numeric_values):",
-                "    failures.append('CRITICAL_PHYSICS_VIOLATION')",
-            ],
-            "ml_efficiency": [
-                "if numeric_values and max(numeric_values) < 0.0:",
-                "    failures.append('negative_metric_detected')",
-            ],
-        }.get(project_config.domain.lower(), [])
+        return self._build_default_oracle(project_config)
+
+    def validate_oracle(self, oracle_path: str | Path) -> bool:
+        module_path = Path(oracle_path)
+        if not module_path.exists():
+            return False
+        spec = importlib.util.spec_from_file_location("genesis_generated_oracle", module_path)
+        if spec is None or spec.loader is None:
+            return False
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return callable(getattr(module, "run_all_checks", None))
+
+    def _build_default_oracle(self, project_config: ProjectConfig) -> str:
+        hints = [hint.strip() for hint in project_config.oracle_hints if hint.strip()]
+        hint_rules = []
+        for hint in hints:
+            lowered = hint.lower()
+            if "metric consistency" in lowered:
+                hint_rules.extend(
+                    [
+                        "    if primary_metric is None:",
+                        "        failures.append('missing_primary_metric')",
+                    ]
+                )
+            if "sample" in lowered or "consistency" in lowered:
+                hint_rules.extend(
+                    [
+                        "    if not json_files:",
+                        "        warnings.append('no_json_artifacts_detected')",
+                    ]
+                )
+
+        domain_rules = []
+        domain = project_config.domain.lower().strip()
+        if domain == "astrophysics":
+            domain_rules.extend(
+                [
+                    "    if any(abs(value) > 1e9 for value in numeric_values):",
+                    "        failures.append('CRITICAL_PHYSICS_VIOLATION')",
+                ]
+            )
+        elif domain == "ml_efficiency":
+            domain_rules.extend(
+                [
+                    "    if primary_metric is not None and primary_metric < 0.0:",
+                    "        failures.append('negative_metric_detected')",
+                ]
+            )
+
+        rules_text = "\n".join(hint_rules + domain_rules)
+        hint_text = "\n".join(f"    warnings.append({hint!r})" for hint in hints) or "    warnings.append('No explicit oracle hints provided.')"
+
         lines = [
-            "def run_all_checks(outputs_dir: str):",
-            "    import json",
-            "    import re",
-            "    from pathlib import Path",
+            "# Auto-generated Genesis project oracle",
+            "from __future__ import annotations",
             "",
+            "import json",
+            "import re",
+            "from pathlib import Path",
+            "",
+            "",
+            "def _flatten_numeric_values(value):",
+            "    values = []",
+            "    if isinstance(value, (int, float)) and not isinstance(value, bool):",
+            "        values.append(float(value))",
+            "    elif isinstance(value, dict):",
+            "        for nested in value.values():",
+            "            values.extend(_flatten_numeric_values(nested))",
+            "    elif isinstance(value, list):",
+            "        for nested in value:",
+            "            values.extend(_flatten_numeric_values(nested))",
+            "    return values",
+            "",
+            "",
+            "def run_all_checks(outputs_dir: str):",
+            "    outputs = Path(outputs_dir)",
             "    failures = []",
             "    warnings = []",
-            "    outputs = Path(outputs_dir)",
-            '    if not outputs.exists():',
-            '        failures.append("outputs_dir_missing")',
             "    numeric_values = []",
+            "    json_files = []",
+            "    primary_metric = None",
+            "",
+            "    if not outputs.exists():",
+            "        return {'pass_rate': 0.0, 'failures': ['outputs_dir_missing'], 'warnings': warnings, 'is_critical_fail': True}",
+            "",
             "    for candidate in sorted(outputs.rglob('*')):",
             "        if not candidate.is_file():",
             "            continue",
             "        if candidate.suffix == '.json':",
+            "            json_files.append(candidate.name)",
             "            try:",
             "                payload = json.loads(candidate.read_text(encoding='utf-8'))",
             "            except Exception:",
             "                failures.append(f'invalid_json::{candidate.name}')",
             "                continue",
-            "            if isinstance(payload, dict):",
-            "                for value in payload.values():",
-            "                    if isinstance(value, (int, float)):",
-            "                        numeric_values.append(float(value))",
+            "            numeric_values.extend(_flatten_numeric_values(payload))",
+            "            if isinstance(payload, dict) and primary_metric is None and isinstance(payload.get('primary_metric'), (int, float)):",
+            "                primary_metric = float(payload['primary_metric'])",
             "        elif candidate.suffix in {'.txt', '.md', '.tex'}:",
             "            text = candidate.read_text(encoding='utf-8')",
             r"            numeric_values.extend(float(match) for match in re.findall(r'[-+]?\d*\.?\d+', text))",
+            "",
             "    if outputs.exists() and not list(outputs.iterdir()):",
             "        failures.append('outputs_dir_empty')",
         ]
-        lines.extend(f"    warnings.append({hint!r})" for hint in hints)
-        lines.extend(f"    {line}" for line in domain_specific)
+        if hint_text:
+            lines.extend(hint_text.split("\n"))
+        if rules_text:
+            lines.extend(rules_text.split("\n"))
         lines.extend(
             [
-                "    return {",
-                "        'pass_rate': 1.0 if not failures else 0.0,",
-                "        'failures': failures,",
-                "        'warnings': warnings,",
-                "        'is_critical_fail': bool(failures),",
-                "    }",
+                "",
+                "    pass_rate = 1.0 if not failures else max(0.0, 1.0 - (len(failures) / max(1, len(json_files) + 1)))",
+                "    return {'pass_rate': round(pass_rate, 4), 'failures': failures, 'warnings': warnings, 'is_critical_fail': bool(failures)}",
             ]
         )
         return "\n".join(lines) + "\n"
 
-    def validate_oracle(self, oracle_path: str) -> bool:
-        return "run_all_checks" in open(oracle_path, encoding="utf-8").read()
-
-    def _from_runtime_payload(self, payload: dict[str, object], project_config: ProjectConfig) -> str:
+    def _from_runtime_payload(self, payload: dict[str, Any]) -> str:
         rules = payload.get("oracle_rules")
         if not isinstance(rules, list) or not rules:
             return ""
+
         lines = [
-            "def run_all_checks(outputs_dir: str):",
-            "    import json",
-            "    from pathlib import Path",
+            "from __future__ import annotations",
             "",
+            "import json",
+            "from pathlib import Path",
+            "",
+            "",
+            "def run_all_checks(outputs_dir: str):",
+            "    outputs = Path(outputs_dir)",
             "    failures = []",
             "    warnings = []",
-            "    outputs = Path(outputs_dir)",
-            "    if not outputs.exists():",
-            "        failures.append('outputs_dir_missing')",
-            "        return {'pass_rate': 0.0, 'failures': failures, 'warnings': warnings, 'is_critical_fail': True}",
             "    combined = {}",
+            "    if not outputs.exists():",
+            "        return {'pass_rate': 0.0, 'failures': ['outputs_dir_missing'], 'warnings': warnings, 'is_critical_fail': True}",
             "    for candidate in outputs.rglob('*.json'):",
             "        try:",
-            "            combined.update(json.loads(candidate.read_text(encoding='utf-8')))",
+            "            payload = json.loads(candidate.read_text(encoding='utf-8'))",
+            "            if isinstance(payload, dict):",
+            "                combined.update(payload)",
             "        except Exception:",
             "            warnings.append(f'ignored_invalid_json::{candidate.name}')",
         ]
@@ -119,12 +186,8 @@ class DomainOracleGenerator:
                 lines.append(f"    warnings.append({rule.strip()!r})")
         lines.extend(
             [
-                "    return {",
-                "        'pass_rate': 1.0 if not failures else 0.0,",
-                "        'failures': failures,",
-                "        'warnings': warnings,",
-                "        'is_critical_fail': bool(failures),",
-                "    }",
+                "    pass_rate = 1.0 if not failures else 0.0",
+                "    return {'pass_rate': pass_rate, 'failures': failures, 'warnings': warnings, 'is_critical_fail': bool(failures)}",
             ]
         )
         return "\n".join(lines) + "\n"

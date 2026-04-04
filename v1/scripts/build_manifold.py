@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from genesis.manifold_utils import compute_density, train_graph_vae
 from genesis.scholarly import ScholarlyClient
 from genesis.storage.manifold import ManifoldIndex
+from genesis.taste.features import ExperimentFeatureExtractor
 
 DEFAULT_PAPER_CORPORA = {
     "general": [
@@ -144,12 +145,26 @@ def main() -> None:
         enriched.append(
             {
                 **paper,
+                "embedding": hash_vector(paper),
                 "latent_z": [round(float(value), 6) for value in latent_vector.tolist()],
                 "density_score": round(float(density), 6),
                 "graph_neighbors": int(adjacency[index].sum() - 1),
             }
         )
     manifold.upsert_collection(enriched, collection="papers")
+    manifest_path = root / f"{args.domain}_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "domain": args.domain,
+                "paper_count": len(enriched),
+                "latent_dim": min(args.latent_dim, len(enriched)),
+                "mean_density": round(sum(item["density_score"] for item in enriched) / len(enriched), 6),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     print(
         json.dumps(
             {
@@ -158,9 +173,26 @@ def main() -> None:
                 "domain": args.domain,
                 "latent_dim": min(args.latent_dim, len(enriched)),
                 "mean_density": round(sum(item["density_score"] for item in enriched) / len(enriched), 6),
+                "manifest_path": str(manifest_path),
             }
         )
     )
+
+
+def hash_vector(paper: dict[str, Any]) -> list[float]:
+    extractor = ExperimentFeatureExtractor(embedding_dim=64)
+    proposal = type(
+        "PaperProposal",
+        (),
+        {
+            "description": f"{paper.get('title', '')} {paper.get('abstract', '')}",
+            "code_diff": "",
+            "expected_trajectory": [],
+            "compute_budget": "local_cpu",
+            "model_parameter_count": 0,
+        },
+    )()
+    return extractor.extract(proposal)[:64]
 
 
 if __name__ == "__main__":

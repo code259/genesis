@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 import requests
@@ -26,7 +28,8 @@ class LiteratureCrossExaminer:
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
         self.api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
-        cache_path = os.getenv("GENESIS_CITATIONS_CACHE", "taste_db/literature_cache.json")
+        cache_root = Path(os.getenv("GENESIS_CACHE_ROOT", Path(tempfile.gettempdir()) / "genesis-cache"))
+        cache_path = os.getenv("GENESIS_CITATIONS_CACHE", str(cache_root / "literature_cache.json"))
         self.client = ScholarlyClient(
             cache_path=cache_path,
             session=self.session,
@@ -34,8 +37,26 @@ class LiteratureCrossExaminer:
         )
 
     def extract_factual_claims(self, text: str) -> list[FactualClaim]:
-        pattern = r"[^.]*\b(?:\d+[%x]?|doi:|arxiv:|according to|et al\.)[^.]*\."
-        return [FactualClaim(match.group(0).strip()) for match in re.finditer(pattern, text, re.IGNORECASE)]
+        sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?])\s+", text)
+            if sentence.strip()
+        ]
+        claims: list[FactualClaim] = []
+        seen: set[str] = set()
+        for sentence in sentences:
+            if not re.search(
+                r"\b(?:\d+[%x]?|doi:|arxiv:|according to|et al\.|accuracy|benchmark|improves?|reduces?)\b",
+                sentence,
+                re.IGNORECASE,
+            ):
+                continue
+            normalized = sentence.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            claims.append(FactualClaim(sentence))
+        return claims
 
     def verify_claim(self, claim: FactualClaim) -> VerificationResult:
         if re.search(r"\b(no citation|unknown)\b", claim.text, re.IGNORECASE):
@@ -51,6 +72,10 @@ class LiteratureCrossExaminer:
             cleaned_query = re.sub(r"\s+", " ", claim.text.strip().rstrip("."))
             candidates = self.client.search_semantic_scholar(cleaned_query, limit=5)
         if not candidates:
+            title_match = re.search(r'"([^"]+)"', claim.text)
+            if title_match:
+                candidates = self.client.search_title(title_match.group(1))
+        if not candidates:
             return VerificationResult(
                 claim=claim.text,
                 verified=False,
@@ -63,20 +88,22 @@ class LiteratureCrossExaminer:
             for candidate in candidates[:3]
             if candidate.get("title")
         ]
+        if doi_match:
+            evidence.append(f"doi:{doi_match.group(0).lower()}")
         evidence.extend(contradictions)
-        verified = not contradictions
+        verified = bool(evidence) and not contradictions
         if not evidence:
             evidence.append("METHODOLOGY_UNSUPPORTED")
             verified = False
         return VerificationResult(claim=claim.text, verified=verified, evidence=evidence)
 
     def check_for_contradictions(self, claim: FactualClaim, search_results: list[dict[str, Any]]) -> list[str]:
-        contradictions: list[str] = []
+        contradictions: set[str] = set()
         claim_text = claim.text.lower()
         for result in search_results:
             snippet = f"{result.get('title', '')} {result.get('abstract', '')}".lower()
             if "contradict" in snippet:
-                contradictions.append("RESULT_CONTRADICTED_BY_LITERATURE")
+                contradictions.add("RESULT_CONTRADICTED_BY_LITERATURE")
             if any(term in claim_text for term in ("impossible", "guaranteed", "always")) and "limited" in snippet:
-                contradictions.append("METHODOLOGY_UNSUPPORTED")
-        return contradictions
+                contradictions.add("METHODOLOGY_UNSUPPORTED")
+        return sorted(contradictions)

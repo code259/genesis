@@ -2,21 +2,64 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Tuple, Union
 
 from genesis.models import ExperimentResult, ensure_parent
+
+try:
+    from sqlalchemy import create_engine, text
+except Exception:  # pragma: no cover - optional backend
+    create_engine = None
+    text = None
 
 
 class ExperimentLedger:
     def __init__(self, path: Union[str, Path]):
         self.path = Path(path)
         ensure_parent(self.path)
+        self.backend = self._select_backend()
+        if self.backend == "sqlalchemy":
+            self.engine = create_engine(f"sqlite:///{self.path}")  # type: ignore[arg-type]
+            self._migrate_sqlalchemy()
+            return
         self._connect().close()
         self._migrate()
 
+    def _select_backend(self) -> str:
+        if create_engine is not None:
+            return "sqlalchemy"
+        return "sqlite3"
+
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path)
+
+    def _migrate_sqlalchemy(self) -> None:
+        assert self.engine is not None and text is not None
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS experiments (
+                        experiment_id TEXT PRIMARY KEY,
+                        parent_experiment_id TEXT,
+                        task_id TEXT NOT NULL,
+                        code_hash TEXT NOT NULL,
+                        config_diff TEXT NOT NULL,
+                        primary_metric REAL NOT NULL,
+                        secondary_metrics TEXT NOT NULL,
+                        trajectory_summary TEXT NOT NULL,
+                        attribution_ablations TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        anomaly_score REAL NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        artifact_path TEXT NOT NULL,
+                        trajectory_path TEXT NOT NULL DEFAULT ''
+                    )
+                    """
+                )
+            )
 
     def _migrate(self) -> None:
         with self._connect() as connection:
@@ -58,13 +101,42 @@ class ExperimentLedger:
         attribution_ablations: Optional[dict[str, Any]] = None,
         timestamp: str = "",
     ) -> None:
-        summary = {
-            "length": len(result.trajectory),
-            "start": result.trajectory[0] if result.trajectory else None,
-            "end": result.trajectory[-1] if result.trajectory else None,
-            "max": max(result.trajectory, default=None),
-            "min": min(result.trajectory, default=None),
-        }
+        summary = self._summarize_trajectory(result.trajectory)
+        if self.backend == "sqlalchemy":
+            assert self.engine is not None and text is not None
+            with self.engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        INSERT OR REPLACE INTO experiments (
+                            experiment_id, parent_experiment_id, task_id, code_hash, config_diff,
+                            primary_metric, secondary_metrics, trajectory_summary, attribution_ablations,
+                            status, anomaly_score, timestamp, artifact_path, trajectory_path
+                        ) VALUES (
+                            :experiment_id, :parent_experiment_id, :task_id, :code_hash, :config_diff,
+                            :primary_metric, :secondary_metrics, :trajectory_summary, :attribution_ablations,
+                            :status, :anomaly_score, :timestamp, :artifact_path, :trajectory_path
+                        )
+                        """
+                    ),
+                    {
+                        "experiment_id": result.experiment_id,
+                        "parent_experiment_id": parent_experiment_id,
+                        "task_id": result.task_id,
+                        "code_hash": result.code_hash,
+                        "config_diff": config_diff,
+                        "primary_metric": result.primary_metric,
+                        "secondary_metrics": json.dumps(result.secondary_metrics),
+                        "trajectory_summary": json.dumps(summary),
+                        "attribution_ablations": json.dumps(attribution_ablations or {}),
+                        "status": result.status,
+                        "anomaly_score": result.anomaly_score,
+                        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+                        "artifact_path": result.artifact_path,
+                        "trajectory_path": result.trajectory_path,
+                    },
+                )
+            return
         with self._connect() as connection:
             connection.execute(
                 """
@@ -86,13 +158,33 @@ class ExperimentLedger:
                     json.dumps(attribution_ablations or {}),
                     result.status,
                     result.anomaly_score,
-                    timestamp,
+                    timestamp or datetime.now(timezone.utc).isoformat(),
                     result.artifact_path,
                     result.trajectory_path,
                 ),
             )
 
     def update_status(self, experiment_id: str, status: str, anomaly_score: Optional[float] = None) -> None:
+        if self.backend == "sqlalchemy":
+            assert self.engine is not None and text is not None
+            with self.engine.begin() as connection:
+                if anomaly_score is None:
+                    connection.execute(
+                        text("UPDATE experiments SET status = :status WHERE experiment_id = :experiment_id"),
+                        {"status": status, "experiment_id": experiment_id},
+                    )
+                else:
+                    connection.execute(
+                        text(
+                            "UPDATE experiments SET status = :status, anomaly_score = :anomaly_score WHERE experiment_id = :experiment_id"
+                        ),
+                        {
+                            "status": status,
+                            "anomaly_score": anomaly_score,
+                            "experiment_id": experiment_id,
+                        },
+                    )
+            return
         with self._connect() as connection:
             if anomaly_score is None:
                 connection.execute(
@@ -106,6 +198,14 @@ class ExperimentLedger:
                 )
 
     def get_by_task(self, task_id: str) -> list[dict[str, Any]]:
+        if self.backend == "sqlalchemy":
+            assert self.engine is not None and text is not None
+            with self.engine.begin() as connection:
+                rows = connection.execute(
+                    text("SELECT * FROM experiments WHERE task_id = :task_id ORDER BY primary_metric DESC"),
+                    {"task_id": task_id},
+                ).mappings().all()
+            return [self._mapping_to_dict(row) for row in rows]
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM experiments WHERE task_id = ? ORDER BY primary_metric DESC",
@@ -114,14 +214,24 @@ class ExperimentLedger:
         return [self._row_to_dict(row) for row in rows]
 
     def get_pareto_frontier(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM experiments ORDER BY primary_metric DESC, anomaly_score ASC"
-            ).fetchall()
+        if self.backend == "sqlalchemy":
+            assert self.engine is not None and text is not None
+            with self.engine.begin() as connection:
+                rows = connection.execute(
+                    text("SELECT * FROM experiments ORDER BY primary_metric DESC, anomaly_score ASC")
+                ).mappings().all()
+            payload_rows = [self._mapping_to_dict(row) for row in rows]
+        else:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    "SELECT * FROM experiments ORDER BY primary_metric DESC, anomaly_score ASC"
+                ).fetchall()
+            payload_rows = [self._row_to_dict(row) for row in rows]
         best_metric = None
         frontier: list[dict[str, Any]] = []
-        for row in rows:
-            payload = self._row_to_dict(row)
+        for payload in payload_rows:
+            if payload["status"] not in {"keep", "running"}:
+                continue
             metric = payload["primary_metric"]
             anomaly = payload["anomaly_score"]
             if best_metric is None or metric >= best_metric or anomaly < 1.0:
@@ -130,12 +240,40 @@ class ExperimentLedger:
         return frontier
 
     def get_anomalies(self, threshold: float) -> list[dict[str, Any]]:
+        if self.backend == "sqlalchemy":
+            assert self.engine is not None and text is not None
+            with self.engine.begin() as connection:
+                rows = connection.execute(
+                    text("SELECT * FROM experiments WHERE anomaly_score > :threshold ORDER BY anomaly_score DESC"),
+                    {"threshold": threshold},
+                ).mappings().all()
+            return [self._mapping_to_dict(row) for row in rows]
         with self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM experiments WHERE anomaly_score > ? ORDER BY anomaly_score DESC",
                 (threshold,),
             ).fetchall()
         return [self._row_to_dict(row) for row in rows]
+
+    def _mapping_to_dict(self, row: Any) -> dict[str, Any]:
+        return self._row_to_dict(
+            (
+                row["experiment_id"],
+                row["parent_experiment_id"],
+                row["task_id"],
+                row["code_hash"],
+                row["config_diff"],
+                row["primary_metric"],
+                row["secondary_metrics"],
+                row["trajectory_summary"],
+                row["attribution_ablations"],
+                row["status"],
+                row["anomaly_score"],
+                row["timestamp"],
+                row["artifact_path"],
+                row["trajectory_path"],
+            )
+        )
 
     def _row_to_dict(self, row: Union[sqlite3.Row, Tuple[Any, ...]]) -> dict[str, Any]:
         (
@@ -169,4 +307,18 @@ class ExperimentLedger:
             "timestamp": timestamp,
             "artifact_path": artifact_path,
             "trajectory_path": trajectory_path,
+        }
+
+    def _summarize_trajectory(self, trajectory: list[float]) -> dict[str, Any]:
+        deltas = [
+            round(current - previous, 6)
+            for previous, current in zip(trajectory, trajectory[1:])
+        ]
+        return {
+            "length": len(trajectory),
+            "start": trajectory[0] if trajectory else None,
+            "end": trajectory[-1] if trajectory else None,
+            "max": max(trajectory, default=None),
+            "min": min(trajectory, default=None),
+            "deltas": deltas,
         }

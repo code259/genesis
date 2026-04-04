@@ -24,6 +24,10 @@ def test_taste_model_calibration_properties():
     model.fit(features[:5], targets[:5], trajectories[:5])
     _, low_data_variances = model.predict(features[5:10])
     model.fit(features, targets, trajectories)
-    _, high_data_variances = model.predict(features[5:10])
+    predictions, high_data_variances = model.predict(features[5:10])
+    trajectory_means, trajectory_variances = model.predict_trajectory(features[5:10])
 
     assert sum(high_data_variances) <= sum(low_data_variances)
+    assert len(predictions) == 5
+    assert len(trajectory_means[0]) == len(trajectories[0])
+    assert len(trajectory_variances[0]) == len(trajectories[0])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -16,11 +17,14 @@ def log_event(
     component: str,
     event_type: str,
     payload: dict[str, Any],
+    level: str = "INFO",
 ) -> None:
     destination = Path(log_path)
     ensure_parent(destination)
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "pid": os.getpid(),
         "project_id": project_id,
         "run_n": run_n,
         "component": component,
@@ -28,4 +32,4 @@ def log_event(
         "payload": payload,
     }
     with destination.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record) + "\n")
+        handle.write(json.dumps(record, sort_keys=True) + "\n")

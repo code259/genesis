@@ -2,6 +2,9 @@ from genesis.config import ProjectConfig
 from genesis.harness.decomposer import TaskDecomposer
 from genesis.harness.instruction_composer import InstructionComposer
 from genesis.harness.token_budget import TokenBudget
+from genesis.models import TaskNode, TaskTree
+import pytest
+from genesis.harness.loop import MetaHarnessLoop
 
 
 def test_token_budget_trims():
@@ -24,8 +27,12 @@ def test_instruction_composer_has_sections():
         config=config,
         belief_summary="summary",
         retrieved_history="history",
+        budget_allocations={"retrieved_history": 8000},
+        requested_modules=["verification", "optimizer"],
     )
     assert "# Objective" in instruction
+    assert "# Budget" in instruction
+    assert "# Requested Modules" in instruction
     assert "# Validation Expectations" in instruction
 
 
@@ -44,3 +51,58 @@ def test_decomposer_builds_task_tree():
     assert len(tree.tasks) == 5
     verification_task = next(task for task in tree.tasks if "Verify experiment outputs" in task.description)
     assert len(verification_task.dependencies) == 2
+
+
+def test_token_budget_cloud_allocation_expands_history():
+    budget = TokenBudget()
+    allocation = budget.allocate(128000)
+    assert allocation["retrieved_history"] >= 20000
+
+
+def test_decomposer_rejects_unknown_dependencies():
+    decomposer = TaskDecomposer()
+    with pytest.raises(ValueError):
+        decomposer._validated_tree(
+            TaskTree(
+                root_id="a",
+                tasks=[
+                    TaskNode(
+                        task_id="a",
+                        description="broken",
+                        acceptance_criteria=[],
+                        oracle_checks=[],
+                        estimated_compute_budget="local_cpu",
+                        dependencies=["b"],
+                    )
+                ],
+            )
+        )
+
+
+def test_harness_requested_modules_expand_on_escalation(tmp_path):
+    loop = MetaHarnessLoop(
+        projects_root=tmp_path / "projects",
+        taste_root=tmp_path / "taste_db",
+        executor=lambda **kwargs: {},
+    )
+    config = ProjectConfig(
+        research_question="Q",
+        domain="astrophysics",
+        compute_budget="local_gpu",
+        time_budget_hours=1,
+        domain_knowledge_model="none",
+        output_dir="projects",
+    )
+    task = TaskNode(
+        task_id="task",
+        description="desc",
+        acceptance_criteria=[],
+        oracle_checks=[],
+        estimated_compute_budget="local_gpu",
+        requires_ml_optimizer=True,
+    )
+    modules = loop._requested_modules(config=config, task_node=task, failed_iterations=3)
+    assert "optimizer" in modules
+    assert "ideation" in modules
+    assert "oracle" in modules
+    assert "domain_knowledge" in modules

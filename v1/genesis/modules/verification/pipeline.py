@@ -36,14 +36,22 @@ class VerificationPipeline:
         else:
             report["checks"].append({"name": "artifact_exists", "passed": False})
         if oracle_path:
-            report["checks"].append(self.oracle_validator.run_oracle(oracle_path, outputs_dir).to_dict())
-            report["checks"].append(self.oracle_validator.validate_with_synthetic_data(oracle_path))
+            oracle_result = self.oracle_validator.run_oracle(oracle_path, outputs_dir).to_dict()
+            oracle_result["name"] = "oracle_execution"
+            oracle_result["passed"] = not oracle_result.get("is_critical_fail", False)
+            report["checks"].append(oracle_result)
+            synthetic_result = self.oracle_validator.validate_with_synthetic_data(oracle_path)
+            synthetic_result["name"] = "oracle_synthetic_validation"
+            report["checks"].append(synthetic_result)
         citation_flags = self._citation_check(outputs_dir)
         if citation_flags:
             report["checks"].append({"name": "citation_verification", "passed": False, "flags": citation_flags})
         else:
             report["checks"].append({"name": "citation_verification", "passed": True})
-        report["passed"] = all(check.get("passed", True) or check.get("pass_rate", 0.0) > 0.0 for check in report["checks"])
+        paper_artifact_check = self._paper_artifact_check(outputs_dir)
+        if paper_artifact_check is not None:
+            report["checks"].append(paper_artifact_check)
+        report["passed"] = all(self._is_check_passing(check) for check in report["checks"])
         return report
 
     def _load_result(self, path: Path) -> dict[str, Any]:
@@ -75,3 +83,30 @@ class VerificationPipeline:
             tex_path.read_text(encoding="utf-8"),
             bib_path.read_text(encoding="utf-8"),
         )
+
+    def _paper_artifact_check(self, outputs_dir: Path) -> dict[str, Any] | None:
+        paper_dir = outputs_dir.parent / "paper"
+        if not paper_dir.exists():
+            return None
+        required = {
+            "latex": paper_dir / "main.tex",
+            "report": paper_dir / "synthesis_report.json",
+        }
+        evidence = [f"{name}={path.exists()}" for name, path in required.items()]
+        if (paper_dir / "main.pdf").exists():
+            evidence.append("pdf=True")
+        if (paper_dir / "figures").exists():
+            metadata_files = list((paper_dir / "figures").glob("**/*.metadata.json"))
+            evidence.append(f"figure_metadata_count={len(metadata_files)}")
+        return {
+            "name": "paper_artifacts",
+            "passed": all(path.exists() for path in required.values()),
+            "evidence": evidence,
+        }
+
+    def _is_check_passing(self, check: dict[str, Any]) -> bool:
+        if "passed" in check:
+            return bool(check["passed"])
+        if "pass_rate" in check:
+            return float(check["pass_rate"]) > 0.0
+        return True

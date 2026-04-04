@@ -40,13 +40,17 @@ class FormalConsistencyChecker:
 
     def check_implementation_drift(self, prose_methods: str, code_path: Union[str, Path]) -> CheckResult:
         code = Path(code_path).read_text(encoding="utf-8") if Path(code_path).exists() else ""
-        overlap = len(set(prose_methods.lower().split()) & set(code.lower().split()))
-        passed = overlap > 3
+        prose_tokens = {token for token in prose_methods.lower().split() if len(token) > 3}
+        code_tokens = {token for token in code.lower().split() if len(token) > 3}
+        overlap = len(prose_tokens & code_tokens)
+        token_budget = max(1, min(len(prose_tokens), len(code_tokens)))
+        overlap_ratio = overlap / token_budget
+        passed = overlap_ratio >= 0.1
         return CheckResult(
             name="implementation_drift",
             passed=passed,
-            evidence=[f"token_overlap={overlap}"],
-            score=float(overlap),
+            evidence=[f"token_overlap={overlap}", f"overlap_ratio={overlap_ratio:.3f}"],
+            score=float(overlap_ratio),
         )
 
     def run_oracle(self, oracle_path: Union[str, Path], outputs_dir: Union[str, Path]) -> OracleResult:

@@ -18,6 +18,16 @@ class ProjectConfig:
     success_criteria: list[str] = field(default_factory=list)
     oracle_hints: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        if self.time_budget_hours <= 0:
+            raise ValueError("time_budget_hours must be a positive integer")
+        self.compute_budget = self.compute_budget.strip()
+        self.domain = self.domain.strip()
+        self.domain_knowledge_model = self.domain_knowledge_model.strip()
+        self.output_dir = self.output_dir.strip()
+        if not all([self.compute_budget, self.domain, self.domain_knowledge_model, self.output_dir]):
+            raise ValueError("project configuration contains empty required fields")
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -40,11 +50,14 @@ def _require_list(payload: dict[str, Any], key: str) -> list[str]:
 
 def load_project_config(path: Union[str, Path]) -> ProjectConfig:
     payload = json.loads(Path(path).read_text())
+    time_budget = payload.get("time_budget_hours")
+    if not isinstance(time_budget, int):
+        raise ValueError("time_budget_hours must be an integer")
     return ProjectConfig(
         research_question=_require_str(payload, "research_question"),
         domain=_require_str(payload, "domain"),
         compute_budget=_require_str(payload, "compute_budget"),
-        time_budget_hours=int(payload["time_budget_hours"]),
+        time_budget_hours=time_budget,
         domain_knowledge_model=_require_str(payload, "domain_knowledge_model"),
         output_dir=_require_str(payload, "output_dir"),
         success_criteria=_require_list(payload, "success_criteria"),

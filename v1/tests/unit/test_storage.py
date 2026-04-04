@@ -1,6 +1,7 @@
 from genesis.storage.causal_dag import CausalDAG
 from genesis.storage.filesystem import ProjectFilesystem
 from genesis.storage.ledger import ExperimentLedger
+from genesis.storage.manifold import ManifoldIndex
 from genesis.taste.persistence import TasteModelPersistence
 from genesis.models import ExperimentResult
 
@@ -12,6 +13,8 @@ def test_filesystem_init_and_results(tmp_path):
     fs.write_json(run_dir / "result.json", {"primary_metric": 0.8})
     assert fs.list_all_results("demo")[0]["primary_metric"] == 0.8
     assert fs.read_project_state("demo")["status"] == "initialized"
+    assert fs.validate_project("demo")
+    assert (tmp_path / "projects" / "demo" / "outputs" / "paper" / "figures").exists()
 
 
 def test_ledger_insert_and_query(tmp_path):
@@ -35,6 +38,24 @@ def test_ledger_insert_and_query(tmp_path):
     record = ledger.get_by_task("task-1")[0]
     assert record["primary_metric"] == 0.9
     assert record["trajectory_path"] == "trajectory.npz"
+    assert record["trajectory_summary"]["deltas"] == [0.8]
+    assert record["timestamp"]
+    assert ledger.backend in {"sqlite3", "sqlalchemy"}
+
+
+def test_manifold_index_supports_backend_selection(tmp_path):
+    manifold = ManifoldIndex(tmp_path / "manifold")
+    manifold.add_paper(
+        {
+            "paper_id": "paper-1",
+            "title": "Title",
+            "embedding": [0.1, 0.2],
+            "latent_z": [0.1, 0.2],
+            "density_score": 0.2,
+        }
+    )
+    assert manifold.backend in {"json", "chromadb"}
+    assert manifold.search_nearest([0.1, 0.2], k=1)[0]["paper_id"] == "paper-1"
 
 
 def test_causal_dag_cycle_detection(tmp_path):
@@ -45,6 +66,19 @@ def test_causal_dag_cycle_detection(tmp_path):
     except ValueError:
         return
     raise AssertionError("expected cycle detection")
+
+
+def test_causal_dag_merge_dedupes_edges(tmp_path):
+    dag = CausalDAG(tmp_path / "dag.json")
+    edge = {
+        "source": "a",
+        "target": "b",
+        "effect_size": 1.0,
+        "confidence": 0.9,
+        "experiment_ids": ["1"],
+    }
+    dag.merge_global_dag({"nodes": ["a", "b"], "edges": [edge, edge]})
+    assert len(dag.get_edges_from("a")) == 1
 
 
 def test_taste_persistence_dedupes_project_data(tmp_path):
