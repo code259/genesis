@@ -37,6 +37,7 @@ class VerificationPipeline:
             report["checks"].append({"name": "artifact_exists", "passed": False})
         if oracle_path:
             report["checks"].append(self.oracle_validator.run_oracle(oracle_path, outputs_dir).to_dict())
+            report["checks"].append(self.oracle_validator.validate_with_synthetic_data(oracle_path))
         citation_flags = self._citation_check(outputs_dir)
         if citation_flags:
             report["checks"].append({"name": "citation_verification", "passed": False, "flags": citation_flags})

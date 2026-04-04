@@ -92,6 +92,7 @@ class ExperimentResult:
     status: str
     code_hash: str
     artifact_path: str
+    trajectory_path: str = ""
     anomaly_score: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:

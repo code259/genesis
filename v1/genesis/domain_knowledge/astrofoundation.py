@@ -11,12 +11,14 @@ class AstroFoundationProvider(DomainKnowledgeProvider):
     def __init__(self) -> None:
         self.summary = ""
         self.client = ScholarlyClient(cache_path="taste_db/astrofoundation_cache.json")
+        self.source = "none"
 
     def initialize(self, research_spec: dict[str, object]) -> str:
         question = str(research_spec.get("research_question", ""))
         provider_summary = self._astrofoundation_summary(question)
         if provider_summary:
             self.summary = provider_summary
+            self.source = "astrofoundation"
             return self.summary
         papers = self.client.search_arxiv(f"astrophysics {question}", limit=3)
         if not papers:
@@ -30,11 +32,13 @@ class AstroFoundationProvider(DomainKnowledgeProvider):
                 "AstroFoundation unavailable locally; retrieved astrophysics context from external literature.\n"
                 + "\n".join(bullet_lines)
             )
+            self.source = "retrieval"
         else:
             self.summary = (
                 "AstroFoundation unavailable locally and no remote astrophysics context was retrieved. "
                 f"Primary focus: {question[:180]}"
             )
+            self.source = "fallback"
         return self.summary
 
     def get_context_summary(self) -> str:

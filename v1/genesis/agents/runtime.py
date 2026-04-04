@@ -104,9 +104,38 @@ class CodingAgentRuntime:
         budget: dict[str, Any],
         category: str,
     ) -> str:
+        schema = {
+            "genesis-ideation": [
+                "summary",
+                "artifact_plan",
+                "experiment_plan",
+                "citations",
+                "next_action",
+                "task_tree",
+            ],
+            "genesis-oracle": [
+                "summary",
+                "artifact_plan",
+                "experiment_plan",
+                "citations",
+                "next_action",
+                "oracle_rules",
+            ],
+            "genesis-paper": [
+                "summary",
+                "artifact_plan",
+                "experiment_plan",
+                "citations",
+                "next_action",
+                "paper_body",
+            ],
+        }.get(
+            category,
+            ["summary", "artifact_plan", "experiment_plan", "citations", "next_action"],
+        )
         return (
             "You are the Genesis coding agent runtime.\n"
-            "Return valid JSON only with keys: summary, artifact_plan, experiment_plan, citations, next_action.\n"
+            f"Return valid JSON only with keys: {', '.join(schema)}.\n"
             f"Category: {category}\n"
             f"Instruction:\n{instruction}\n\n"
             f"Context:\n{json.dumps(context, indent=2)}\n\n"

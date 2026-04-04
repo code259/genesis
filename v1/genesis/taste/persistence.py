@@ -33,5 +33,16 @@ class TasteModelPersistence:
 
     def merge_project_data(self, project_id: str, experiments: list[dict[str, Any]]) -> None:
         current = json.loads(self.dataset_path.read_text(encoding="utf-8"))
-        current.extend(experiments)
-        self.dataset_path.write_text(json.dumps(current, indent=2), encoding="utf-8")
+        indexed = {
+            item.get("experiment_id", f"existing-{index}"): item
+            for index, item in enumerate(current)
+            if isinstance(item, dict)
+        }
+        for experiment in experiments:
+            if not isinstance(experiment, dict):
+                continue
+            experiment_id = experiment.get("experiment_id")
+            if experiment_id:
+                indexed[experiment_id] = experiment
+        merged = list(indexed.values())
+        self.dataset_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
