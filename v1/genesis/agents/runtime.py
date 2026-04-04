@@ -29,6 +29,14 @@ class ProviderRuntimeError(RuntimeError):
 
 
 class CodingAgentRuntime:
+    DEFAULT_RESPONSE_SCHEMA = {
+        "summary": "",
+        "artifact_plan": [],
+        "experiment_plan": [],
+        "citations": [],
+        "next_action": "continue",
+    }
+
     def __init__(
         self,
         config_path: str | Path,
@@ -50,6 +58,12 @@ class CodingAgentRuntime:
         context: dict[str, Any],
         budget: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
+        if category not in self.categories:
+            raise ProviderRuntimeError(
+                f"unknown category: {category}",
+                error_class="unknown_category",
+                retryable=False,
+            )
         category_config = self.categories[category]
         prompt = self._build_prompt(instruction, context, budget or {}, category)
         errors: list[str] = []
@@ -62,7 +76,7 @@ class CodingAgentRuntime:
                     content = self._invoke_groq(model, prompt, category_config)
                 else:
                     raise ProviderRuntimeError(f"unsupported provider: {category_config.provider}")
-                payload = self._parse_payload(content)
+                payload = self._normalize_payload(self._parse_payload(content), category)
                 payload["provider"] = category_config.provider
                 payload["model"] = model
                 payload["raw_response"] = content
@@ -84,7 +98,7 @@ class CodingAgentRuntime:
 
     def _load_categories(self) -> dict[str, CategoryConfig]:
         raw = self.config_path.read_text(encoding="utf-8")
-        cleaned = re.sub(r"//.*", "", raw)
+        cleaned = self._strip_jsonc_comments(raw)
         payload = json.loads(cleaned)
         categories: dict[str, CategoryConfig] = {}
         for name, config in payload.get("categories", {}).items():
@@ -205,11 +219,70 @@ class CodingAgentRuntime:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", content, re.DOTALL)
-            if match:
-                return json.loads(match.group(0))
+            extracted = self._extract_json_object(content)
+            if extracted is not None:
+                return json.loads(extracted)
         raise ProviderRuntimeError(
             "model response did not contain valid JSON",
             error_class="invalid_json_response",
             retryable=True,
         )
+
+    def _normalize_payload(self, payload: dict[str, Any], category: str) -> dict[str, Any]:
+        normalized = dict(self.DEFAULT_RESPONSE_SCHEMA)
+        if category == "genesis-ideation":
+            normalized["task_tree"] = []
+        elif category == "genesis-oracle":
+            normalized["oracle_rules"] = []
+        elif category == "genesis-paper":
+            normalized["paper_body"] = ""
+        normalized.update(payload)
+
+        for list_key in ("artifact_plan", "experiment_plan", "citations", "task_tree", "oracle_rules"):
+            if list_key in normalized and not isinstance(normalized[list_key], list):
+                normalized[list_key] = []
+        for string_key in ("summary", "next_action", "paper_body"):
+            if string_key in normalized and not isinstance(normalized[string_key], str):
+                normalized[string_key] = str(normalized[string_key])
+        return normalized
+
+    def _extract_json_object(self, content: str) -> Optional[str]:
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
+        if fenced:
+            return fenced.group(1)
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if match:
+            return match.group(0)
+        return None
+
+    def _strip_jsonc_comments(self, content: str) -> str:
+        output: list[str] = []
+        in_string = False
+        escape = False
+        index = 0
+        length = len(content)
+        while index < length:
+            char = content[index]
+            nxt = content[index + 1] if index + 1 < length else ""
+            if in_string:
+                output.append(char)
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                index += 1
+                continue
+            if char == '"':
+                in_string = True
+                output.append(char)
+                index += 1
+                continue
+            if char == "/" and nxt == "/":
+                while index < length and content[index] != "\n":
+                    index += 1
+                continue
+            output.append(char)
+            index += 1
+        return "".join(output)

@@ -40,7 +40,11 @@ class ScholarlyClient:
             "fields": "title,year,authors,abstract,externalIds,citationCount,url",
         }
         payload = self._request_json(url, params=params, semantic_scholar=True)
-        data = payload.get("data", []) if isinstance(payload, dict) else []
+        data = [
+            self._normalize_semantic_scholar_item(item)
+            for item in payload.get("data", [])
+            if isinstance(item, dict)
+        ] if isinstance(payload, dict) else []
         self._set_cache(cache_key, data)
         return data
 
@@ -61,8 +65,9 @@ class ScholarlyClient:
         url = f"https://api.semanticscholar.org/graph/v1/paper/{urllib.parse.quote(paper_id, safe='')}"
         params = {"fields": "title,year,authors,abstract,externalIds,citationCount,url,citations.title"}
         payload = self._request_json(url, params=params, semantic_scholar=True)
-        self._set_cache(cache_key, payload)
-        return payload if isinstance(payload, dict) else {}
+        normalized = self._normalize_semantic_scholar_item(payload) if isinstance(payload, dict) else {}
+        self._set_cache(cache_key, normalized)
+        return normalized
 
     def resolve_crossref_doi(self, doi: str) -> dict[str, Any]:
         normalized = doi.lower().strip()
@@ -72,8 +77,9 @@ class ScholarlyClient:
             return cached
         payload = self._request_json(f"https://api.crossref.org/works/{urllib.parse.quote(normalized)}")
         message = payload.get("message", {}) if isinstance(payload, dict) else {}
-        self._set_cache(cache_key, message)
-        return message
+        normalized_message = self._normalize_crossref_item(message) if isinstance(message, dict) else {}
+        self._set_cache(cache_key, normalized_message)
+        return normalized_message
 
     def search_crossref(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         cache_key = self._cache_key("crossref_search", {"query": query, "limit": limit})
@@ -84,7 +90,11 @@ class ScholarlyClient:
             "https://api.crossref.org/works",
             params={"query.title": query, "rows": limit},
         )
-        items = payload.get("message", {}).get("items", []) if isinstance(payload, dict) else []
+        items = [
+            self._normalize_crossref_item(item)
+            for item in payload.get("message", {}).get("items", [])
+            if isinstance(item, dict)
+        ] if isinstance(payload, dict) else []
         self._set_cache(cache_key, items)
         return items
 
@@ -107,7 +117,10 @@ class ScholarlyClient:
         if not xml_text:
             return []
         namespace = {"atom": "http://www.w3.org/2005/Atom"}
-        root = ET.fromstring(xml_text)
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return []
         results: list[dict[str, Any]] = []
         for entry in root.findall("atom:entry", namespace):
             title = (entry.findtext("atom:title", default="", namespaces=namespace) or "").strip()
@@ -119,14 +132,17 @@ class ScholarlyClient:
                 for author in entry.findall("atom:author", namespace)
             ]
             results.append(
-                {
-                    "title": title,
-                    "abstract": summary,
-                    "year": int(published[:4]) if published[:4].isdigit() else None,
-                    "authors": [{"name": author} for author in authors if author],
-                    "externalIds": {"ArXiv": arxiv_id.rsplit("/", 1)[-1] if arxiv_id else None},
-                    "url": arxiv_id,
-                }
+                self._normalize_common_metadata(
+                    {
+                        "paper_id": arxiv_id.rsplit("/", 1)[-1] if arxiv_id else title,
+                        "title": title,
+                        "abstract": summary,
+                        "year": int(published[:4]) if published[:4].isdigit() else None,
+                        "authors": [{"name": author} for author in authors if author],
+                        "externalIds": {"ArXiv": arxiv_id.rsplit("/", 1)[-1] if arxiv_id else None},
+                        "url": arxiv_id,
+                    }
+                )
             )
         self._set_cache(cache_key, results)
         return results
@@ -195,3 +211,119 @@ class ScholarlyClient:
 
     def _cache_key(self, prefix: str, payload: dict[str, Any]) -> str:
         return prefix + ":" + json.dumps(payload, sort_keys=True)
+
+    def _normalize_semantic_scholar_item(self, item: dict[str, Any]) -> dict[str, Any]:
+        citations = item.get("citations", [])
+        normalized_citations = [
+            {
+                "paper_id": citation.get("paperId"),
+                "title": self._normalize_title(citation.get("title")),
+            }
+            for citation in citations
+            if isinstance(citation, dict) and (citation.get("paperId") or citation.get("title"))
+        ]
+        return self._normalize_common_metadata(
+            {
+                "paper_id": item.get("paperId")
+                or self._extract_external_id(item.get("externalIds"), "DOI")
+                or self._normalize_title(item.get("title")),
+                "title": item.get("title"),
+                "abstract": item.get("abstract", ""),
+                "year": item.get("year"),
+                "authors": item.get("authors", []),
+                "externalIds": item.get("externalIds", {}),
+                "citationCount": item.get("citationCount", 0),
+                "url": item.get("url", ""),
+                "citations": normalized_citations,
+            }
+        )
+
+    def _normalize_crossref_item(self, item: dict[str, Any]) -> dict[str, Any]:
+        authors = [
+            {"name": " ".join(part for part in [author.get("given"), author.get("family")] if part).strip()}
+            for author in item.get("author", [])
+            if isinstance(author, dict)
+        ]
+        title = self._normalize_title(item.get("title"))
+        abstract = item.get("abstract", "")
+        if isinstance(abstract, str):
+            abstract = abstract.replace("<jats:p>", "").replace("</jats:p>", "").strip()
+        year = self._extract_crossref_year(item)
+        doi = item.get("DOI")
+        return self._normalize_common_metadata(
+            {
+                "paper_id": doi or title,
+                "title": title,
+                "abstract": abstract,
+                "year": year,
+                "authors": authors,
+                "externalIds": {"DOI": doi} if doi else {},
+                "citationCount": item.get("is-referenced-by-count", 0),
+                "url": item.get("URL", ""),
+                "venue": self._normalize_title(item.get("container-title")),
+                "doi": doi,
+            }
+        )
+
+    def _normalize_common_metadata(self, item: dict[str, Any]) -> dict[str, Any]:
+        title = self._normalize_title(item.get("title"))
+        authors = self._normalize_authors(item.get("authors", []))
+        external_ids = item.get("externalIds", {})
+        if not isinstance(external_ids, dict):
+            external_ids = {}
+        return {
+            "paper_id": item.get("paper_id") or title,
+            "title": title,
+            "abstract": item.get("abstract", "") or "",
+            "year": self._normalize_year(item.get("year")),
+            "authors": authors,
+            "externalIds": external_ids,
+            "citationCount": int(item.get("citationCount", 0) or 0),
+            "url": item.get("url", "") or "",
+            "venue": item.get("venue", "") or "",
+            "doi": item.get("doi") or self._extract_external_id(external_ids, "DOI"),
+            "citations": item.get("citations", []),
+        }
+
+    def _normalize_title(self, value: Any) -> str:
+        if isinstance(value, list):
+            return next((str(item).strip() for item in value if str(item).strip()), "")
+        return str(value or "").strip()
+
+    def _normalize_authors(self, authors: Any) -> list[dict[str, str]]:
+        normalized: list[dict[str, str]] = []
+        if not isinstance(authors, list):
+            return normalized
+        for author in authors:
+            if isinstance(author, dict):
+                name = str(author.get("name") or "").strip()
+            else:
+                name = str(author).strip()
+            if name:
+                normalized.append({"name": name})
+        return normalized
+
+    def _normalize_year(self, value: Any) -> Optional[int]:
+        if isinstance(value, int):
+            return value
+        text = str(value or "").strip()
+        return int(text[:4]) if len(text) >= 4 and text[:4].isdigit() else None
+
+    def _extract_external_id(self, external_ids: Any, key: str) -> Optional[str]:
+        if isinstance(external_ids, dict):
+            value = external_ids.get(key)
+            if value:
+                return str(value)
+        return None
+
+    def _extract_crossref_year(self, item: dict[str, Any]) -> Optional[int]:
+        for field in ("published-print", "published-online", "issued"):
+            value = item.get(field)
+            if not isinstance(value, dict):
+                continue
+            date_parts = value.get("date-parts", [])
+            if date_parts and isinstance(date_parts[0], list) and date_parts[0]:
+                year = date_parts[0][0]
+                if isinstance(year, int):
+                    return year
+        return self._normalize_year(item.get("created", {}).get("date-time") if isinstance(item.get("created"), dict) else None)
