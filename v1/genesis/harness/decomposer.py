@@ -1,14 +1,32 @@
 from __future__ import annotations
 
 from hashlib import sha1
-from typing import Iterable
+from typing import Iterable, Optional
+
+from genesis.agents.runtime import CodingAgentRuntime, ProviderRuntimeError
 
 from genesis.config import ProjectConfig
 from genesis.models import TaskNode, TaskTree
 
 
 class TaskDecomposer:
+    def __init__(self, runtime: Optional[CodingAgentRuntime] = None):
+        self.runtime = runtime
+
     def decompose(self, config: ProjectConfig) -> TaskTree:
+        if self.runtime is not None:
+            try:
+                generated = self.runtime.generate_task(
+                    category="genesis-ideation",
+                    instruction=f"Produce a bounded research task DAG for: {config.research_question}",
+                    context=config.to_dict(),
+                    budget={"max_depth": 4, "max_breadth": 6},
+                )
+                task_tree = self._parse_runtime_task_tree(generated)
+                if task_tree.tasks:
+                    return task_tree
+            except ProviderRuntimeError:
+                pass
         tasks: list[TaskNode] = []
         root_id = self._task_id(config.research_question, "root")
 
@@ -72,6 +90,30 @@ class TaskDecomposer:
             )
         )
         return TaskTree(root_id=tree.root_id, tasks=amended)
+
+    def _parse_runtime_task_tree(self, payload: dict[str, object]) -> TaskTree:
+        nodes = payload.get("task_tree")
+        if not isinstance(nodes, list):
+            return TaskTree(root_id="root", tasks=[])
+        tasks: list[TaskNode] = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            task_id = str(node.get("task_id") or self._task_id(str(node.get("description", "")), "runtime"))
+            tasks.append(
+                TaskNode(
+                    task_id=task_id,
+                    description=str(node.get("description", "")),
+                    acceptance_criteria=[str(item) for item in node.get("acceptance_criteria", [])],
+                    oracle_checks=[str(item) for item in node.get("oracle_checks", [])],
+                    estimated_compute_budget=str(node.get("estimated_compute_budget", "local_cpu")),
+                    dependencies=[str(item) for item in node.get("dependencies", [])],
+                    success_metric=str(node.get("success_metric", "")),
+                    requires_ml_optimizer=bool(node.get("requires_ml_optimizer", False)),
+                )
+            )
+        root_id = tasks[0].task_id if tasks else "root"
+        return TaskTree(root_id=root_id, tasks=tasks)
 
     def _task(
         self,

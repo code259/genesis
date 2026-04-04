@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from genesis.manifold_utils import hash_embedding
 from genesis.models import Idea
 from genesis.storage.manifold import ManifoldIndex
 
@@ -9,7 +10,9 @@ class GreedyAdjacencySearch:
         self.manifold = manifold
 
     def search(self, task_description: str, k: int = 5, exclude_attempted: bool = True) -> list[Idea]:
-        query = [float((ord(character) % 31) / 31.0) for character in task_description[:16]]
+        papers = self.manifold.all_papers()
+        latent_dim = len(papers[0].get("latent_z", [])) if papers else 32
+        query = hash_embedding(task_description, dim=max(32, latent_dim))[:latent_dim].tolist()
         results = self.manifold.search_nearest(query, k=k)
         return [
             Idea(

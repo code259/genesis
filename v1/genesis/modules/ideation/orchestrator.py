@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from genesis.models import ScoredIdea
+from genesis.taste.gp_model import TasteGP
 
 from .greedy import GreedyAdjacencySearch
 from .low_density import LowDensityExplorer
@@ -24,7 +25,13 @@ class IdeationOrchestrator:
         self.low_density = low_density
         self.scorer = scorer or IdeaScorer()
 
-    def run(self, task_description: str, n_failed_iterations: int) -> list[ScoredIdea]:
+    def run(
+        self,
+        task_description: str,
+        n_failed_iterations: int,
+        *,
+        taste_model: TasteGP | None = None,
+    ) -> list[ScoredIdea]:
         ideas = self.greedy.search(task_description, k=3)
         if not ideas and n_failed_iterations >= 5:
             ideas.append(self.pollination.propose_pollination(task_description))
@@ -34,4 +41,10 @@ class IdeationOrchestrator:
                     task_description, self.low_density.find_low_density_points()
                 )
             )
-        return [ScoredIdea(idea=idea, score=self.scorer.score(idea, task_description)) for idea in ideas]
+        return [
+            ScoredIdea(
+                idea=idea,
+                score=self.scorer.score(idea, task_description, taste_model=taste_model),
+            )
+            for idea in ideas
+        ]

@@ -46,17 +46,17 @@ class MetaHarnessLoop:
         self.token_budget = TokenBudget()
         self.history_reader = SelectiveHistoryReader(self.filesystem, self.token_budget)
         self.composer = InstructionComposer()
-        self.decomposer = TaskDecomposer()
+        self.agent_runtime = CodingAgentRuntime(
+            Path(__file__).resolve().parents[2] / ".opencode" / "oh-my-openagent.jsonc"
+        )
+        self.decomposer = TaskDecomposer(runtime=self.agent_runtime)
         self.adversarial = AdversarialOrchestrator()
         self.criteria_generator = AcceptanceCriteriaGenerator()
-        self.oracle_generator = DomainOracleGenerator()
+        self.oracle_generator = DomainOracleGenerator(runtime=self.agent_runtime)
         self.taste_persistence = TasteModelPersistence(taste_root)
         self.domain_registry = DomainKnowledgeRegistry()
         self.verification = VerificationPipeline()
         self.feature_extractor = ExperimentFeatureExtractor()
-        self.agent_runtime = CodingAgentRuntime(
-            Path(__file__).resolve().parents[2] / ".opencode" / "oh-my-openagent.jsonc"
-        )
         self.executor = executor or self._default_executor
 
     def run(self, project_id: str, config: ProjectConfig, max_runs: int = 3) -> ProjectResult:
@@ -190,7 +190,11 @@ class MetaHarnessLoop:
                 },
             )
             if failed_iterations >= 5:
-                ideas = ideation.run(config.research_question, failed_iterations)
+                ideas = ideation.run(
+                    config.research_question,
+                    failed_iterations,
+                    taste_model=taste_model,
+                )
                 self.filesystem.write_json(
                     run_dir / "ideation_report.json",
                     {"ideas": [idea.to_dict() for idea in ideas]},
@@ -222,9 +226,10 @@ class MetaHarnessLoop:
                 run_count=run_n,
                 summary=result_summary,
             )
-        paper = PaperSynthesizer(self.filesystem.base_dir).synthesize(project_id)
+        paper = PaperSynthesizer(self.filesystem.base_dir, runtime=self.agent_runtime).synthesize(project_id)
         self._update_causal_dag(project_dir / "causal_dag.json", project_id)
         self.taste_persistence.save_after_project(project_id, taste_model)
+        self.taste_persistence.merge_project_data(project_id, ledger.get_pareto_frontier())
         self.filesystem.write_project_state(
             project_id,
             {
@@ -306,9 +311,19 @@ class MetaHarnessLoop:
                 ],
                 n_parallel=3,
             )
+            if taste_model and taste_model.training_targets:
+                predicted_trajectories, predicted_variances = taste_model.predict_trajectory(
+                    [self.feature_extractor.extract(proposal) for proposal in proposals]
+                )
+                for result, predicted, variances in zip(experiment_results, predicted_trajectories, predicted_variances):
+                    result.anomaly_score = self._trajectory_anomaly_score(result.trajectory, predicted, variances)
             best = max(experiment_results, key=lambda result: result.primary_metric)
-            for result in experiment_results:
-                ledger.insert_experiment(result, config_diff="generated proposal", timestamp=f"run-{run_n}")
+            for proposal, result in zip(proposals, experiment_results):
+                ledger.insert_experiment(
+                    result,
+                    config_diff=proposal.code_diff,
+                    timestamp=f"run-{run_n}",
+                )
             if taste_model:
                 taste_model.fit(
                     [self.feature_extractor.extract(proposal) for proposal in proposals],
@@ -374,6 +389,20 @@ class MetaHarnessLoop:
 
     def _check_stopping_criteria(self, adversarial_report) -> bool:
         return adversarial_report.stopping_decision.should_stop
+
+    def _trajectory_anomaly_score(
+        self,
+        actual: list[float],
+        predicted: list[float],
+        variances: list[float],
+    ) -> float:
+        if not actual or not predicted:
+            return 0.0
+        score = 0.0
+        for actual_value, predicted_value, variance in zip(actual, predicted, variances):
+            denominator = max(variance, 1e-6)
+            score += ((actual_value - predicted_value) ** 2) / denominator
+        return round(score / max(1, len(actual)), 6)
 
     def _update_causal_dag(self, dag_path: Path, project_id: str) -> None:
         dag = CausalDAG(dag_path)

@@ -5,14 +5,16 @@ import subprocess
 from pathlib import Path
 from typing import Union
 
+from genesis.agents.runtime import CodingAgentRuntime, ProviderRuntimeError
 from genesis.models import FigureSpec
 from genesis.modules.citations.agent import CitationsAgent
 from genesis.modules.plotting.module import PlottingModule
 
 
 class PaperSynthesizer:
-    def __init__(self, project_root: Union[str, Path]):
+    def __init__(self, project_root: Union[str, Path], runtime: CodingAgentRuntime | None = None):
         self.project_root = Path(project_root)
+        self.runtime = runtime
 
     def synthesize(self, project_id: str) -> dict[str, str]:
         project_dir = self.project_root / project_id
@@ -98,8 +100,25 @@ class PaperSynthesizer:
                 + f"Primary metric: {result.get('primary_metric', 0.0)}\\\\\n"
                 + f"Verification passed: {item['verification'].get('passed', False)}\n"
             )
+        body = "\n".join(body_lines)
+        if self.runtime is not None:
+            try:
+                payload = self.runtime.generate_task(
+                    category="genesis-paper",
+                    instruction="Draft the abstract and body for the final paper from verified run artifacts.",
+                    context={
+                        "project_id": project_dir.name,
+                        "results": [item["result"] for item in results],
+                        "verification": [item["verification"] for item in results],
+                    },
+                    budget={"sections": ["abstract", "body"]},
+                )
+                abstract = str(payload.get("summary") or abstract)
+                body = str(payload.get("paper_body") or body)
+            except ProviderRuntimeError:
+                pass
         figure_block = self._build_figure_block(project_dir, results)
-        return {"abstract": abstract, "body": "\n".join(body_lines), "figure_block": figure_block}
+        return {"abstract": abstract, "body": body, "figure_block": figure_block}
 
     def _collect_reference_metadata(self, project_dir: Path, citations: CitationsAgent) -> list[dict[str, object]]:
         spec_path = project_dir / "spec.json"
