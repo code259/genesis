@@ -14,7 +14,14 @@ def test_full_run(tmp_path, monkeypatch):
         lambda self, **kwargs: {
             "summary": "Provider executed task successfully.",
             "artifact_plan": [{"path": "notes.md", "content": "generated note"}],
-            "experiment_plan": [],
+            "experiment_plan": [
+                {
+                    "description": "agent proposed experiment",
+                    "code_diff": "warmup_ratio=0.3",
+                    "expected_metric": 0.62,
+                    "expected_trajectory": [0.2, 0.45, 0.62],
+                }
+            ],
             "citations": [],
             "next_action": "continue",
             "provider": "test",
@@ -42,6 +49,8 @@ def test_full_run(tmp_path, monkeypatch):
     result = runner.invoke(main, ["run", "--project-id", "demo1234", "--spec", str(spec_path)])
     assert result.exit_code == 0, result.output
     assert "demo1234" in result.output
+    result_json = json.loads(result.output)
+    assert result_json["status"] == "complete"
 
 
 def test_init_and_status_commands(tmp_path, monkeypatch):
