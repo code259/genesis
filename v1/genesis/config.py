@@ -53,21 +53,47 @@ def load_project_config(path: Union[str, Path]) -> ProjectConfig:
 
 
 def load_api_config() -> dict[str, Any]:
-    semantic_scholar_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+    dotenv = _load_dotenv()
+    semantic_scholar_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY") or dotenv.get("SEMANTIC_SCHOLAR_API_KEY")
     groq_keys = [
         value
-        for key, value in sorted(os.environ.items())
+        for key, value in _merged_env(dotenv).items()
         if key.startswith("GROQ_API_KEY") and value
     ]
     ollama_keys = [
         value
-        for key, value in sorted(os.environ.items())
+        for key, value in _merged_env(dotenv).items()
         if key.startswith("OLLAMA_API_KEY") and value
     ]
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL") or dotenv.get("OLLAMA_BASE_URL") or "http://127.0.0.1:11434"
     return {
         "semantic_scholar_api_key": semantic_scholar_key,
         "groq_api_keys": groq_keys,
         "ollama_api_keys": ollama_keys,
         "ollama_base_url": ollama_base_url,
     }
+
+
+def _load_dotenv() -> dict[str, str]:
+    candidates = [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parents[2] / ".env",
+        Path.home() / ".env",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            values: dict[str, str] = {}
+            for line in candidate.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip('"').strip("'")
+            return values
+    return {}
+
+
+def _merged_env(dotenv: dict[str, str]) -> dict[str, str]:
+    merged = dict(dotenv)
+    merged.update({key: value for key, value in os.environ.items() if value})
+    return merged

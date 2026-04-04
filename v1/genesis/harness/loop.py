@@ -9,7 +9,7 @@ from genesis.domain_knowledge.registry import DomainKnowledgeRegistry
 from genesis.harness.instruction_composer import InstructionComposer
 from genesis.harness.decomposer import TaskDecomposer
 from genesis.harness.token_budget import TokenBudget
-from genesis.models import ProjectResult
+from genesis.models import ExperimentProposal, ProjectResult
 from genesis.modules.adversarial.criteria_generator import AcceptanceCriteriaGenerator
 from genesis.modules.adversarial.orchestrator import AdversarialOrchestrator
 from genesis.modules.ideation.greedy import GreedyAdjacencySearch
@@ -46,17 +46,17 @@ class MetaHarnessLoop:
         self.token_budget = TokenBudget()
         self.history_reader = SelectiveHistoryReader(self.filesystem, self.token_budget)
         self.composer = InstructionComposer()
-        self.decomposer = TaskDecomposer()
+        self.agent_runtime = CodingAgentRuntime(
+            Path(__file__).resolve().parents[2] / ".opencode" / "oh-my-openagent.jsonc"
+        )
+        self.decomposer = TaskDecomposer(runtime=self.agent_runtime)
         self.adversarial = AdversarialOrchestrator()
         self.criteria_generator = AcceptanceCriteriaGenerator()
-        self.oracle_generator = DomainOracleGenerator()
+        self.oracle_generator = DomainOracleGenerator(runtime=self.agent_runtime)
         self.taste_persistence = TasteModelPersistence(taste_root)
         self.domain_registry = DomainKnowledgeRegistry()
         self.verification = VerificationPipeline()
         self.feature_extractor = ExperimentFeatureExtractor()
-        self.agent_runtime = CodingAgentRuntime(
-            Path(__file__).resolve().parents[2] / ".opencode" / "oh-my-openagent.jsonc"
-        )
         self.executor = executor or self._default_executor
 
     def run(self, project_id: str, config: ProjectConfig, max_runs: int = 3) -> ProjectResult:
@@ -190,7 +190,11 @@ class MetaHarnessLoop:
                 },
             )
             if failed_iterations >= 5:
-                ideas = ideation.run(config.research_question, failed_iterations)
+                ideas = ideation.run(
+                    config.research_question,
+                    failed_iterations,
+                    taste_model=taste_model,
+                )
                 self.filesystem.write_json(
                     run_dir / "ideation_report.json",
                     {"ideas": [idea.to_dict() for idea in ideas]},
@@ -222,9 +226,10 @@ class MetaHarnessLoop:
                 run_count=run_n,
                 summary=result_summary,
             )
-        paper = PaperSynthesizer(self.filesystem.base_dir).synthesize(project_id)
+        paper = PaperSynthesizer(self.filesystem.base_dir, runtime=self.agent_runtime).synthesize(project_id)
         self._update_causal_dag(project_dir / "causal_dag.json", project_id)
         self.taste_persistence.save_after_project(project_id, taste_model)
+        self.taste_persistence.merge_project_data(project_id, ledger.get_pareto_frontier())
         self.filesystem.write_project_state(
             project_id,
             {
@@ -273,11 +278,11 @@ class MetaHarnessLoop:
             budget={"max_runs": 1, "compute_budget": config.compute_budget},
         )
         if task_node and getattr(task_node, "requires_ml_optimizer", False):
-            proposals = ExperimentProposer().propose_next(
-                task_node.task_id,
-                n=3,
-                prior_metric=ledger.get_by_task(task_node.task_id)[0]["primary_metric"] if ledger.get_by_task(task_node.task_id) else 0.0,
-                compute_budget=config.compute_budget,
+            proposals = self._resolve_experiment_proposals(
+                task_node=task_node,
+                config=config,
+                ledger=ledger,
+                agent_result=agent_result,
             )
             if taste_model and taste_model.training_targets:
                 features = [self.feature_extractor.extract(proposal) for proposal in proposals]
@@ -306,9 +311,19 @@ class MetaHarnessLoop:
                 ],
                 n_parallel=3,
             )
+            if taste_model and taste_model.training_targets:
+                predicted_trajectories, predicted_variances = taste_model.predict_trajectory(
+                    [self.feature_extractor.extract(proposal) for proposal in proposals]
+                )
+                for result, predicted, variances in zip(experiment_results, predicted_trajectories, predicted_variances):
+                    result.anomaly_score = self._trajectory_anomaly_score(result.trajectory, predicted, variances)
             best = max(experiment_results, key=lambda result: result.primary_metric)
-            for result in experiment_results:
-                ledger.insert_experiment(result, config_diff="generated proposal", timestamp=f"run-{run_n}")
+            for proposal, result in zip(proposals, experiment_results):
+                ledger.insert_experiment(
+                    result,
+                    config_diff=proposal.code_diff,
+                    timestamp=f"run-{run_n}",
+                )
             if taste_model:
                 taste_model.fit(
                     [self.feature_extractor.extract(proposal) for proposal in proposals],
@@ -326,6 +341,7 @@ class MetaHarnessLoop:
                 "errors": [],
                 "artifact_dir": str(Path(best.artifact_path).parent),
                 "selected_experiment": best.to_dict(),
+                "citations": agent_result.get("citations", []),
                 "agent_runtime": {
                     "provider": agent_result.get("provider"),
                     "model": agent_result.get("model"),
@@ -347,6 +363,7 @@ class MetaHarnessLoop:
                 "errors": [],
                 "artifact_dir": str(artifact_dir),
                 "generated_artifacts": artifact_files,
+                "citations": agent_result.get("citations", []),
                 "agent_runtime": {
                     "provider": agent_result.get("provider"),
                     "model": agent_result.get("model"),
@@ -374,6 +391,56 @@ class MetaHarnessLoop:
 
     def _check_stopping_criteria(self, adversarial_report) -> bool:
         return adversarial_report.stopping_decision.should_stop
+
+    def _trajectory_anomaly_score(
+        self,
+        actual: list[float],
+        predicted: list[float],
+        variances: list[float],
+    ) -> float:
+        if not actual or not predicted:
+            return 0.0
+        score = 0.0
+        for actual_value, predicted_value, variance in zip(actual, predicted, variances):
+            denominator = max(variance, 1e-6)
+            score += ((actual_value - predicted_value) ** 2) / denominator
+        return round(score / max(1, len(actual)), 6)
+
+    def _resolve_experiment_proposals(
+        self,
+        *,
+        task_node: Any,
+        config: ProjectConfig,
+        ledger: ExperimentLedger,
+        agent_result: dict[str, Any],
+    ) -> list[Any]:
+        plan = agent_result.get("experiment_plan")
+        if isinstance(plan, list) and plan:
+            proposals = []
+            for index, item in enumerate(plan, start=1):
+                if not isinstance(item, dict):
+                    continue
+                proposals.append(
+                    ExperimentProposal(
+                        description=str(item.get("description", f"Experiment variant {index}")),
+                        code_diff=str(item.get("code_diff", f"variant {index}")),
+                        expected_metric=float(item.get("expected_metric", 0.4 + 0.05 * index)),
+                        expected_trajectory=[
+                            float(value)
+                            for value in item.get("expected_trajectory", [0.2, 0.4, 0.6])
+                        ],
+                        compute_budget=str(item.get("compute_budget", config.compute_budget)),
+                        model_parameter_count=int(item.get("model_parameter_count", 0)),
+                    )
+                )
+            if proposals:
+                return proposals
+        return ExperimentProposer().propose_next(
+            task_node.task_id,
+            n=3,
+            prior_metric=ledger.get_by_task(task_node.task_id)[0]["primary_metric"] if ledger.get_by_task(task_node.task_id) else 0.0,
+            compute_budget=config.compute_budget,
+        )
 
     def _update_causal_dag(self, dag_path: Path, project_id: str) -> None:
         dag = CausalDAG(dag_path)

@@ -1,10 +1,29 @@
 from __future__ import annotations
 
+import json
+
+from genesis.agents.runtime import CodingAgentRuntime, ProviderRuntimeError
 from genesis.config import ProjectConfig
 
 
 class DomainOracleGenerator:
+    def __init__(self, runtime: CodingAgentRuntime | None = None):
+        self.runtime = runtime
+
     def generate(self, project_config: ProjectConfig) -> str:
+        if self.runtime is not None:
+            try:
+                payload = self.runtime.generate_task(
+                    category="genesis-oracle",
+                    instruction=f"Generate oracle rules for: {project_config.research_question}",
+                    context=project_config.to_dict(),
+                    budget={"max_rules": 6},
+                )
+                generated = self._from_runtime_payload(payload, project_config)
+                if generated:
+                    return generated
+            except ProviderRuntimeError:
+                pass
         hints = project_config.oracle_hints or ["No explicit oracle hints provided."]
         domain_specific = {
             "astrophysics": [
@@ -63,3 +82,49 @@ class DomainOracleGenerator:
 
     def validate_oracle(self, oracle_path: str) -> bool:
         return "run_all_checks" in open(oracle_path, encoding="utf-8").read()
+
+    def _from_runtime_payload(self, payload: dict[str, object], project_config: ProjectConfig) -> str:
+        rules = payload.get("oracle_rules")
+        if not isinstance(rules, list) or not rules:
+            return ""
+        lines = [
+            "def run_all_checks(outputs_dir: str):",
+            "    import json",
+            "    from pathlib import Path",
+            "",
+            "    failures = []",
+            "    warnings = []",
+            "    outputs = Path(outputs_dir)",
+            "    if not outputs.exists():",
+            "        failures.append('outputs_dir_missing')",
+            "        return {'pass_rate': 0.0, 'failures': failures, 'warnings': warnings, 'is_critical_fail': True}",
+            "    combined = {}",
+            "    for candidate in outputs.rglob('*.json'):",
+            "        try:",
+            "            combined.update(json.loads(candidate.read_text(encoding='utf-8')))",
+            "        except Exception:",
+            "            warnings.append(f'ignored_invalid_json::{candidate.name}')",
+        ]
+        for rule in rules:
+            if isinstance(rule, dict):
+                expression = str(rule.get("expression", "")).strip()
+                failure = str(rule.get("failure", "oracle_rule_failed")).strip()
+                warning = str(rule.get("warning", "")).strip()
+                if expression:
+                    lines.append(f"    if not ({expression}):")
+                    lines.append(f"        failures.append({failure!r})")
+                if warning:
+                    lines.append(f"    warnings.append({warning!r})")
+            elif isinstance(rule, str) and rule.strip():
+                lines.append(f"    warnings.append({rule.strip()!r})")
+        lines.extend(
+            [
+                "    return {",
+                "        'pass_rate': 1.0 if not failures else 0.0,",
+                "        'failures': failures,",
+                "        'warnings': warnings,",
+                "        'is_critical_fail': bool(failures),",
+                "    }",
+            ]
+        )
+        return "\n".join(lines) + "\n"

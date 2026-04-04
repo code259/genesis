@@ -2,17 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-import re
 import sys
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from genesis.manifold_utils import compute_density, train_graph_vae
 from genesis.scholarly import ScholarlyClient
 from genesis.storage.manifold import ManifoldIndex
 
@@ -73,69 +69,6 @@ DEFAULT_PAPER_CORPORA = {
     ],
 }
 
-
-def _tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]{2,}", text.lower())
-
-
-def _hash_embedding(text: str, dim: int = 256) -> np.ndarray:
-    vector = np.zeros(dim, dtype=float)
-    counts = Counter(_tokenize(text))
-    for token, count in counts.items():
-        vector[hash(token) % dim] += float(count)
-    norm = np.linalg.norm(vector)
-    return vector / norm if norm else vector
-
-
-def _build_citation_adjacency(papers: list[dict[str, Any]]) -> np.ndarray:
-    paper_index = {paper["paper_id"]: idx for idx, paper in enumerate(papers)}
-    adjacency = np.eye(len(papers), dtype=float)
-    for idx, paper in enumerate(papers):
-        for citation in paper.get("citations", []):
-            target_id = citation.get("paper_id")
-            if target_id in paper_index:
-                adjacency[idx, paper_index[target_id]] = 1.0
-                adjacency[paper_index[target_id], idx] = 1.0
-    degree = np.sum(adjacency, axis=1)
-    degree[degree == 0.0] = 1.0
-    inv_sqrt = np.diag(1.0 / np.sqrt(degree))
-    return inv_sqrt @ adjacency @ inv_sqrt
-
-
-def _compute_latent_vectors(papers: list[dict[str, Any]], dim: int = 32) -> np.ndarray:
-    text_matrix = np.vstack(
-        [_hash_embedding(f"{paper.get('title', '')} {paper.get('abstract', '')}") for paper in papers]
-    )
-    adjacency = _build_citation_adjacency(papers)
-    smoothed = adjacency @ text_matrix
-    target_dim = min(dim, smoothed.shape[0], smoothed.shape[1])
-    if target_dim == 0:
-        return np.zeros((len(papers), 0), dtype=float)
-    _, _, vh = np.linalg.svd(smoothed, full_matrices=False)
-    projection = vh[:target_dim].T
-    latent = smoothed @ projection
-    norms = np.linalg.norm(latent, axis=1, keepdims=True)
-    norms[norms == 0.0] = 1.0
-    return latent / norms
-
-
-def _compute_density(latent: np.ndarray, k: int = 10) -> list[float]:
-    if len(latent) <= 1:
-        return [0.0 for _ in range(len(latent))]
-    scores: list[float] = []
-    for idx, vector in enumerate(latent):
-        distances = []
-        for other_idx, other in enumerate(latent):
-            if idx == other_idx:
-                continue
-            cosine = float(np.dot(vector, other) / (np.linalg.norm(vector) * np.linalg.norm(other)))
-            distances.append(1.0 - cosine)
-        distances.sort()
-        neighbors = distances[: min(k, len(distances))]
-        scores.append(float(sum(neighbors) / len(neighbors)) if neighbors else 0.0)
-    return scores
-
-
 def _load_seed_papers(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -184,6 +117,7 @@ def main() -> None:
     parser.add_argument("--input", default="")
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--latent-dim", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=200)
     args = parser.parse_args()
 
     root = Path("manifold_index")
@@ -199,15 +133,20 @@ def main() -> None:
     if not papers:
         raise SystemExit("No papers available to build the manifold")
 
-    latent = _compute_latent_vectors(papers, dim=args.latent_dim)
-    density_scores = _compute_density(latent, k=min(10, max(1, len(papers) - 1)))
+    latent, adjacency = train_graph_vae(
+        papers,
+        latent_dim=args.latent_dim,
+        epochs=args.epochs,
+    )
+    density_scores = compute_density(latent, k=min(10, max(1, len(papers) - 1)))
     enriched: list[dict[str, Any]] = []
-    for paper, latent_vector, density in zip(papers, latent, density_scores):
+    for index, (paper, latent_vector, density) in enumerate(zip(papers, latent, density_scores)):
         enriched.append(
             {
                 **paper,
                 "latent_z": [round(float(value), 6) for value in latent_vector.tolist()],
                 "density_score": round(float(density), 6),
+                "graph_neighbors": int(adjacency[index].sum() - 1),
             }
         )
     manifold.upsert_collection(enriched, collection="papers")
