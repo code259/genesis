@@ -22,12 +22,14 @@ class PaperSynthesizer:
         paper_dir.mkdir(parents=True, exist_ok=True)
         references_path = paper_dir / "references.bib"
         tex_path = paper_dir / "main.tex"
+        run_index_path = paper_dir / "run_index.json"
         report_path = paper_dir / "synthesis_report.json"
         citations = CitationsAgent(project_dir / "knowledge" / "citations_cache.json")
 
         sections = self._collect_sections(project_dir)
         reference_metadata = self._collect_reference_metadata(project_dir, sections["runs"], citations)
         references_path.write_text("".join(citations.format_bibtex(metadata) for metadata in reference_metadata), encoding="utf-8")
+        run_index_path.write_text(json.dumps(sections["run_index"], indent=2), encoding="utf-8")
 
         template = (Path(__file__).parent / "templates" / "main.tex").read_text(encoding="utf-8")
         tex = (
@@ -63,6 +65,8 @@ class PaperSynthesizer:
             "verified_run_count": sections["verified_run_count"],
             "total_run_count": sections["total_run_count"],
             "reference_count": len(reference_metadata),
+            "citation_flag_count": len(citation_flags),
+            "figure_generated": bool(sections["figure_block"]),
             "pdf_path": str(pdf_path),
             "latex_path": str(tex_path),
         }
@@ -92,6 +96,7 @@ class PaperSynthesizer:
                 "figure_block": "",
                 "verified_run_count": 0,
                 "total_run_count": 0,
+                "run_index": [],
                 "runs": [],
             }
 
@@ -141,6 +146,14 @@ class PaperSynthesizer:
             "figure_block": self._build_figure_block(project_dir, source_runs),
             "verified_run_count": len(verified_runs),
             "total_run_count": len(runs),
+            "run_index": [
+                {
+                    "task_id": run["result"].get("task_id", "unknown"),
+                    "primary_metric": run["result"].get("primary_metric", 0.0),
+                    "verification_passed": run["verification"].get("passed", False),
+                }
+                for run in source_runs
+            ],
             "runs": source_runs,
         }
 

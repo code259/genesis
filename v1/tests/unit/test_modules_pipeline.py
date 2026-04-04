@@ -64,9 +64,15 @@ def test_citations_plotting_and_verification(tmp_path):
     output_dir = tmp_path / "outputs"
     output_dir.mkdir()
     (output_dir / "result.json").write_text("{}", encoding="utf-8")
+    paper_dir = tmp_path / "paper"
+    paper_dir.mkdir()
+    (paper_dir / "main.tex").write_text("\\cite{test_author_2026_a_test_paper}", encoding="utf-8")
+    (paper_dir / "references.bib").write_text(bibtex, encoding="utf-8")
+    (paper_dir / "synthesis_report.json").write_text("{}", encoding="utf-8")
     report = verification.run(output_dir, "project-demo")
     assert report["checks"]
     assert isinstance(report["passed"], bool)
+    assert any(check["name"] == "paper_artifacts" for check in report["checks"])
 
 
 def test_paper_synthesizer_and_domain_registry(tmp_path, monkeypatch):
@@ -82,6 +88,7 @@ def test_paper_synthesizer_and_domain_registry(tmp_path, monkeypatch):
     result = PaperSynthesizer(project_root).synthesize("demo")
     assert Path(result["latex_path"]).exists()
     assert (paper_dir / "synthesis_report.json").exists()
+    assert (paper_dir / "run_index.json").exists()
 
     provider = DomainKnowledgeRegistry(cache_root=tmp_path / "cache").get_provider("astrophysics")
     summary = provider.initialize({"research_question": "How does this behave?"})

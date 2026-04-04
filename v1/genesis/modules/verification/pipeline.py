@@ -48,6 +48,9 @@ class VerificationPipeline:
             report["checks"].append({"name": "citation_verification", "passed": False, "flags": citation_flags})
         else:
             report["checks"].append({"name": "citation_verification", "passed": True})
+        paper_artifact_check = self._paper_artifact_check(outputs_dir)
+        if paper_artifact_check is not None:
+            report["checks"].append(paper_artifact_check)
         report["passed"] = all(self._is_check_passing(check) for check in report["checks"])
         return report
 
@@ -80,6 +83,26 @@ class VerificationPipeline:
             tex_path.read_text(encoding="utf-8"),
             bib_path.read_text(encoding="utf-8"),
         )
+
+    def _paper_artifact_check(self, outputs_dir: Path) -> dict[str, Any] | None:
+        paper_dir = outputs_dir.parent / "paper"
+        if not paper_dir.exists():
+            return None
+        required = {
+            "latex": paper_dir / "main.tex",
+            "report": paper_dir / "synthesis_report.json",
+        }
+        evidence = [f"{name}={path.exists()}" for name, path in required.items()]
+        if (paper_dir / "main.pdf").exists():
+            evidence.append("pdf=True")
+        if (paper_dir / "figures").exists():
+            metadata_files = list((paper_dir / "figures").glob("**/*.metadata.json"))
+            evidence.append(f"figure_metadata_count={len(metadata_files)}")
+        return {
+            "name": "paper_artifacts",
+            "passed": all(path.exists() for path in required.values()),
+            "evidence": evidence,
+        }
 
     def _is_check_passing(self, check: dict[str, Any]) -> bool:
         if "passed" in check:
