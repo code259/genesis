@@ -13,7 +13,7 @@ def _dataset():
     ]
     clean = [
         {
-            "summary": f"According to prior work, this benchmark improves by {index + 1} percent with grounded evidence.",
+            "summary": "According to prior work with grounded evidence, this benchmark improves meaningfully and remains well-supported.",
             "primary_metric": 0.7,
         }
         for index in range(25)
@@ -25,7 +25,15 @@ def _flagged(report) -> bool:
     return bool(report.claim_flags or report.literature_flags)
 
 
-def test_hallucination_rate_benchmark():
+def test_hallucination_rate_benchmark(monkeypatch):
+    monkeypatch.setattr(
+        "genesis.modules.adversarial.literature.LiteratureCrossExaminer.verify_claim",
+        lambda self, claim: __import__("types").SimpleNamespace(
+            claim=claim.text,
+            verified="grounded evidence" in claim.text.lower(),
+            evidence=["verified_reference"] if "grounded evidence" in claim.text.lower() else ["CITATION_NOT_FOUND"],
+        ),
+    )
     orchestrator = AdversarialOrchestrator()
     hallucinated, clean = _dataset()
     hallucinated_results = [

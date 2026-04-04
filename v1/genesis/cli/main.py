@@ -105,7 +105,7 @@ def results(project_id: str, root_dir: Path) -> None:
 @click.option("--domain", required=True)
 def build_manifold(domain: str) -> None:
     result = subprocess.run(
-        ["python3", "scripts/build_manifold.py"],
+        ["python3", "scripts/build_manifold.py", "--domain", domain],
         capture_output=True,
         text=True,
         check=False,

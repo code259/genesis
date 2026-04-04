@@ -75,6 +75,28 @@ class ManifoldIndex:
     def all_papers(self) -> list[dict[str, Any]]:
         return self._load(self.papers_path)
 
+    def all_experiments(self) -> list[dict[str, Any]]:
+        return self._load(self.experiments_path)
+
+    def recompute_density_scores(self, *, collection: str = "papers", k: int = 10) -> list[dict[str, Any]]:
+        path = self.papers_path if collection == "papers" else self.experiments_path
+        items = self._load(path)
+        for index, item in enumerate(items):
+            vector = item.get("latent_z", item.get("embedding", []))
+            distances = sorted(
+                _cosine_distance(vector, other.get("latent_z", other.get("embedding", [])))
+                for other_index, other in enumerate(items)
+                if other_index != index
+            )
+            neighbors = distances[: min(k, len(distances))]
+            item["density_score"] = round(sum(neighbors) / len(neighbors), 6) if neighbors else 0.0
+        self._save(path, items)
+        return items
+
+    def upsert_collection(self, items: list[dict[str, Any]], *, collection: str = "papers") -> None:
+        path = self.papers_path if collection == "papers" else self.experiments_path
+        self._save(path, items)
+
     def _load(self, path: Path) -> list[dict[str, Any]]:
         return json.loads(path.read_text(encoding="utf-8"))
 
