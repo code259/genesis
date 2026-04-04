@@ -18,7 +18,7 @@ specification and implementation guide.
 
 ```bash
 cd v1
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,data,verification,paper]"
 pytest
 python -m genesis.cli.main --help
 ```

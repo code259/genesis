@@ -10,12 +10,18 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
   "click>=8.0",
+  "loguru>=0.7",
+  "pydantic>=2.0",
   "requests>=2.31",
+  "rich>=13.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.4",
+  "mypy>=1.10",
 ]
 ml = [
   "numpy>=1.26",
@@ -25,15 +31,23 @@ ml = [
   "torch-geometric>=2.5",
 ]
 data = [
+  "alembic>=1.13",
   "chromadb>=0.5",
   "sqlalchemy>=2.0",
 ]
+verification = [
+  "bibtexparser>=2.0",
+]
 paper = [
+  "jinja2>=3.1",
   "matplotlib>=3.8",
   "pylatex>=1.4",
 ]
 domain = [
   "astropy>=6.0",
+]
+all = [
+  "genesis-v1[dev,ml,data,verification,paper,domain]",
 ]
 
 [project.scripts]
