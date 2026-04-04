@@ -100,6 +100,7 @@ def test_feature_extractor_gp_and_persistence_shape(tmp_path):
     restored = TasteGP.load(save_path)
     means, _ = restored.predict(features[2:])
     assert len(means) == 2
+    assert model.backend in {"scipy", "gpytorch"}
 
 
 def test_oracle_resolver_and_ideation_orchestrator(tmp_path):

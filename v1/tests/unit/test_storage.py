@@ -1,6 +1,7 @@
 from genesis.storage.causal_dag import CausalDAG
 from genesis.storage.filesystem import ProjectFilesystem
 from genesis.storage.ledger import ExperimentLedger
+from genesis.storage.manifold import ManifoldIndex
 from genesis.taste.persistence import TasteModelPersistence
 from genesis.models import ExperimentResult
 
@@ -39,6 +40,22 @@ def test_ledger_insert_and_query(tmp_path):
     assert record["trajectory_path"] == "trajectory.npz"
     assert record["trajectory_summary"]["deltas"] == [0.8]
     assert record["timestamp"]
+    assert ledger.backend in {"sqlite3", "sqlalchemy"}
+
+
+def test_manifold_index_supports_backend_selection(tmp_path):
+    manifold = ManifoldIndex(tmp_path / "manifold")
+    manifold.add_paper(
+        {
+            "paper_id": "paper-1",
+            "title": "Title",
+            "embedding": [0.1, 0.2],
+            "latent_z": [0.1, 0.2],
+            "density_score": 0.2,
+        }
+    )
+    assert manifold.backend in {"json", "chromadb"}
+    assert manifold.search_nearest([0.1, 0.2], k=1)[0]["paper_id"] == "paper-1"
 
 
 def test_causal_dag_cycle_detection(tmp_path):
