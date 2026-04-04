@@ -21,11 +21,16 @@ class PaperSynthesizer:
         paper_dir = project_dir / "outputs" / "paper"
         paper_dir.mkdir(parents=True, exist_ok=True)
         references = paper_dir / "references.bib"
+        run_index = paper_dir / "run_index.json"
         citations = CitationsAgent(project_dir / "knowledge" / "citations_cache.json")
         sections = self._collect_sections(project_dir)
         reference_metadata = self._collect_reference_metadata(project_dir, citations)
         references.write_text(
             "".join(citations.format_bibtex(metadata) for metadata in reference_metadata),
+            encoding="utf-8",
+        )
+        run_index.write_text(
+            json.dumps(sections["run_index"], indent=2),
             encoding="utf-8",
         )
         template = (Path(__file__).parent / "templates" / "main.tex").read_text(encoding="utf-8")
@@ -81,6 +86,7 @@ class PaperSynthesizer:
                 "abstract": "No verified results were available at synthesis time.",
                 "body": "The project did not produce runnable outputs before synthesis.",
                 "figure_block": "",
+                "run_index": [],
             }
         top_metric = max(item["result"].get("primary_metric", 0.0) for item in results)
         verified_runs = sum(1 for item in results if item["verification"].get("passed"))
@@ -118,7 +124,19 @@ class PaperSynthesizer:
             except ProviderRuntimeError:
                 pass
         figure_block = self._build_figure_block(project_dir, results)
-        return {"abstract": abstract, "body": body, "figure_block": figure_block}
+        return {
+            "abstract": abstract,
+            "body": body,
+            "figure_block": figure_block,
+            "run_index": [
+                {
+                    "task_id": item["result"].get("task_id", "unknown"),
+                    "primary_metric": item["result"].get("primary_metric", 0.0),
+                    "verification_passed": item["verification"].get("passed", False),
+                }
+                for item in results
+            ],
+        }
 
     def _collect_reference_metadata(self, project_dir: Path, citations: CitationsAgent) -> list[dict[str, object]]:
         spec_path = project_dir / "spec.json"
