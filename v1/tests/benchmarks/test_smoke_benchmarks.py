@@ -1,3 +1,5 @@
+import os
+
 from genesis.models import ExperimentProposal
 from genesis.modules.adversarial.orchestrator import AdversarialOrchestrator
 from genesis.modules.optimizer.proposer import ExperimentProposer
@@ -17,6 +19,7 @@ def test_benchmark_smoke_optimizer_and_taste():
 
 
 def test_benchmark_smoke_adversarial():
+    os.environ.setdefault("GENESIS_CACHE_ROOT", "/tmp/genesis-smoke-cache")
     report = __import__("asyncio").run(
         AdversarialOrchestrator().run(
             {
