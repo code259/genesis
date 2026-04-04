@@ -1,0 +1,100 @@
+{
+  "arxiv_search:{\"limit\": 3, \"query\": \"astrophysics How does this behave?\"}": [
+    {
+      "title": "The causal structure of galactic astrophysics",
+      "abstract": "Data-driven astrophysics currently relies on the detection and characterisation of correlations between objects' properties, which are then used to test physical theories that make predictions for them. This process fails to utilise information in the data that forms a crucial part of the theories' predictions, namely which variables are directly correlated (as opposed to accidentally correlated through others), the directions of these determinations, and the presence or absence of confounders that correlate variables in the dataset but are themselves absent from it. We propose to recover this information through causal discovery, a well-developed methodology for inferring the causal structure of datasets that is however almost entirely unknown to astrophysics. We develop a causal discovery algorithm suitable for large astrophysical datasets and illustrate it on $\\sim$4.5$\\times10^5$ nearby galaxies from the Nasa Sloan Atlas, demonstrating its ability to distinguish physical mechanisms that are degenerate on the basis of correlations alone.",
+      "year": 2025,
+      "authors": [
+        {
+          "name": "Harry Desmond"
+        },
+        {
+          "name": "Joseph Ramsey"
+        }
+      ],
+      "externalIds": {
+        "ArXiv": "2510.01112v3"
+      },
+      "url": "http://arxiv.org/abs/2510.01112v3"
+    },
+    {
+      "title": "Well-being in French Astrophysics",
+      "abstract": "It has become clear that early career astrophysics researchers (doctoral researchers, post-docs, etc) have a very diverse appreciation of their career, with some declaring it the best job that you can have and others suffering from overwork, harrassment and stress from the precarity of their job, and associated difficulties. In order to establish how astrophysics researchers, primarily in France, experience their career, we sent out a survey to understand the impact that their job has on their well-being. 276 people responded to the survey. Whilst around half of the respondents expressed pleasure derived from their career, it is clear that many (early career) researchers are suffering due to overwork, with more than a quarter saying that they work in excess of 50 hours per week and 2\\% in excess of 90 h per week. Almost 30\\% professed to having suffered harrassment or discrimination in the course of their work. Further, whilst only 20\\% had suffered mental health issues before starting their career in astrophysics, $\\sim$45\\% said that they suffered with mental health problems since starting in astrophysics. Here we provide results from the survey as well as possible avenues to explore and a list of recommendations to improve (early) careers in astrophysics.",
+      "year": 2022,
+      "authors": [
+        {
+          "name": "N. A. Webb"
+        },
+        {
+          "name": "C. Bot"
+        },
+        {
+          "name": "S. Charpinet"
+        },
+        {
+          "name": "T. Contini"
+        },
+        {
+          "name": "L. Jouve"
+        },
+        {
+          "name": "F. Koliopanos"
+        },
+        {
+          "name": "A. Lamberts"
+        },
+        {
+          "name": "H. Meheut"
+        },
+        {
+          "name": "S. Mei"
+        },
+        {
+          "name": "I. Ristorcelli"
+        },
+        {
+          "name": "G. Soucail"
+        }
+      ],
+      "externalIds": {
+        "ArXiv": "2202.01768v1"
+      },
+      "url": "http://arxiv.org/abs/2202.01768v1"
+    },
+    {
+      "title": "The reflex instability: exponential growth of a large-scale $m=1$ mode in astrophysical discs",
+      "abstract": "We report the finding of a linear, non-axisymmetric, global instability in gas discs around stars, which may be relevant to other astrophysical discs. It takes the form of an $m=1$ mode that grows in the disc density distribution while the star-barycentre distance rises exponentially with a characteristic timescale that is orders of magnitude longer than the orbital period. We present results of hydrodynamical simulations with various codes and numerical methods, using either barycentric or stellocentric reference frames, with or without the disc's self gravity: all simulations consistently show an unstable mode growing exponentially.\n  The instability disappears if, and only if, the reflex motion of the star due to the disc's asymmetry is not taken into account in the simulations. For this reason we refer to this instability as the reflex instability. We identify a feedback loop as a possible origin, whereby the acceleration of the star excites the eccentricity of the disc, yielding an $m=1$ mode in the density distribution which, in turn, pulls the star. The growth timescale of the instability decreases with increasing disc mass and is a few hundred orbits for disc-to-star mass ratios of a few percent. If truly physical, and not due to a numerical artifact that would be common to all the codes we have employed, the reflex instability could have a dramatic impact on protoplanetary discs evolution and planetary formation.",
+      "year": 2025,
+      "authors": [
+        {
+          "name": "Aur\u00e9lien Crida"
+        },
+        {
+          "name": "Cl\u00e9ment Baruteau"
+        },
+        {
+          "name": "Jean-Fran\u00e7ois Gonzalez"
+        },
+        {
+          "name": "Fr\u00e9d\u00e9ric Masset"
+        },
+        {
+          "name": "Paul Segr\u00e9tain"
+        },
+        {
+          "name": "Philippine Griveaud"
+        },
+        {
+          "name": "H\u00e9lo\u00efse M\u00e9heut"
+        },
+        {
+          "name": "Elena Lega"
+        }
+      ],
+      "externalIds": {
+        "ArXiv": "2508.07859v1"
+      },
+      "url": "http://arxiv.org/abs/2508.07859v1"
+    }
+  ]
+}
