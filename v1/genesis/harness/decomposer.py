@@ -10,6 +10,9 @@ from genesis.models import TaskNode, TaskTree
 
 
 class TaskDecomposer:
+    MAX_DEPTH = 4
+    MAX_BREADTH = 6
+
     def __init__(self, runtime: Optional[CodingAgentRuntime] = None):
         self.runtime = runtime
 
@@ -71,7 +74,7 @@ class TaskDecomposer:
             requires_ml_optimizer=False,
         )
         tasks.extend([literature, oracle, experiment, verification, synthesis])
-        return TaskTree(root_id=root_id, tasks=tasks)
+        return self._validated_tree(TaskTree(root_id=root_id, tasks=tasks))
 
     def amend(self, tree: TaskTree, rationale: str) -> TaskTree:
         if not tree.tasks:
@@ -89,7 +92,7 @@ class TaskDecomposer:
                 requires_ml_optimizer=False,
             )
         )
-        return TaskTree(root_id=tree.root_id, tasks=amended)
+        return self._validated_tree(TaskTree(root_id=tree.root_id, tasks=amended))
 
     def _parse_runtime_task_tree(self, payload: dict[str, object]) -> TaskTree:
         nodes = payload.get("task_tree")
@@ -113,7 +116,7 @@ class TaskDecomposer:
                 )
             )
         root_id = tasks[0].task_id if tasks else "root"
-        return TaskTree(root_id=root_id, tasks=tasks)
+        return self._validated_tree(TaskTree(root_id=root_id, tasks=tasks))
 
     def _task(
         self,
@@ -149,3 +152,13 @@ class TaskDecomposer:
         ]
         criteria.extend(config.success_criteria[:2])
         return criteria
+
+    def _validated_tree(self, tree: TaskTree) -> TaskTree:
+        if len(tree.tasks) > self.MAX_BREADTH * self.MAX_DEPTH:
+            raise ValueError("task tree exceeds maximum supported size")
+        task_ids = {task.task_id for task in tree.tasks}
+        for task in tree.tasks:
+            missing = [dependency for dependency in task.dependencies if dependency not in task_ids]
+            if missing:
+                raise ValueError(f"task {task.task_id} has unknown dependencies: {missing}")
+        return tree
