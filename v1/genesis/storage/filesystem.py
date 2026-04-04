@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, List, Union
 
@@ -18,8 +20,15 @@ class ProjectFilesystem:
         (project_dir / "outputs" / "paper").mkdir(parents=True, exist_ok=True)
         (project_dir / "outputs" / "code").mkdir(parents=True, exist_ok=True)
         (project_dir / "experiments" / "trajectories").mkdir(parents=True, exist_ok=True)
+        (project_dir / "runtime" / "sandboxes").mkdir(parents=True, exist_ok=True)
         self.write_json(project_dir / "spec.json", spec)
-        self.write_json(project_dir / "causal_dag.json", {"nodes": [], "edges": []})
+        if not (project_dir / "causal_dag.json").exists():
+            self.write_json(project_dir / "causal_dag.json", {"nodes": [], "edges": []})
+        if not (project_dir / "project_state.json").exists():
+            self.write_json(
+                project_dir / "project_state.json",
+                {"status": "initialized", "run_count": 0, "last_run_status": None},
+            )
         return project_dir
 
     def get_project_dir(self, project_id: str) -> Path:
@@ -39,7 +48,10 @@ class ProjectFilesystem:
     def write_json(self, path: Union[str, Path], payload: Union[dict[str, Any], List[Any]]) -> Path:
         destination = Path(path)
         ensure_parent(destination)
-        destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        with tempfile.NamedTemporaryFile("w", delete=False, dir=str(destination.parent), encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2))
+            temp_name = handle.name
+        os.replace(temp_name, destination)
         return destination
 
     def read_json(self, path: Union[str, Path]) -> Any:
@@ -53,3 +65,33 @@ class ProjectFilesystem:
         for result_path in sorted((self.base_dir / project_id / "runs").glob("*/result.json")):
             results.append(self.read_json(result_path))
         return sorted(results, key=lambda item: item.get("primary_metric", 0.0), reverse=True)
+
+    def validate_project(self, project_id: str) -> bool:
+        project_dir = self.get_project_dir(project_id)
+        required = [
+            project_dir / "spec.json",
+            project_dir / "runs",
+            project_dir / "knowledge",
+            project_dir / "outputs" / "paper",
+            project_dir / "outputs" / "code",
+            project_dir / "experiments" / "trajectories",
+            project_dir / "causal_dag.json",
+        ]
+        return all(path.exists() for path in required)
+
+    def read_human_intervention(self, project_id: str) -> dict[str, Any] | None:
+        path = self.get_project_dir(project_id) / "human_intervention.json"
+        if not path.exists():
+            return None
+        return self.read_json(path)
+
+    def clear_human_intervention(self, project_id: str) -> None:
+        path = self.get_project_dir(project_id) / "human_intervention.json"
+        if path.exists():
+            path.unlink()
+
+    def write_halt(self, project_id: str, payload: dict[str, Any]) -> Path:
+        return self.write_json(self.get_project_dir(project_id) / "HALT.json", payload)
+
+    def write_project_state(self, project_id: str, payload: dict[str, Any]) -> Path:
+        return self.write_json(self.get_project_dir(project_id) / "project_state.json", payload)

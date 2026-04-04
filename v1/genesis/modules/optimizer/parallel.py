@@ -19,4 +19,24 @@ class ParallelExperimentManager:
                 executor.submit(self.runner.run, experiment["task_id"], experiment, experiment.get("experiment_id"))
                 for experiment in experiments
             ]
-        return [future.result() for future in futures]
+        results: list[ExperimentResult] = []
+        for future in futures:
+            try:
+                results.append(future.result())
+            except Exception as exc:  # noqa: BLE001
+                results.append(
+                    ExperimentResult(
+                        experiment_id="failed-experiment",
+                        task_id="unknown",
+                        primary_metric=0.0,
+                        secondary_metrics={"error": 1.0},
+                        trajectory=[],
+                        peak_memory=0.0,
+                        runtime_seconds=0.0,
+                        status="crash",
+                        code_hash="",
+                        artifact_path=str(exc),
+                        anomaly_score=1.0,
+                    )
+                )
+        return results

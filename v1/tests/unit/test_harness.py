@@ -41,5 +41,6 @@ def test_decomposer_builds_task_tree():
         success_criteria=["baseline", "experiment"],
     )
     tree = decomposer.decompose(config)
-    assert len(tree.tasks) == 2
-    assert tree.tasks[1].dependencies
+    assert len(tree.tasks) == 5
+    verification_task = next(task for task in tree.tasks if "Verify experiment outputs" in task.description)
+    assert len(verification_task.dependencies) == 2
