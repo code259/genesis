@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from genesis.agents.runtime import CodingAgentRuntime
+from genesis.agents.runtime import CodingAgentRuntime, ProviderRuntimeError
 from genesis.config import ProjectConfig
 from genesis.domain_knowledge.registry import DomainKnowledgeRegistry
 from genesis.harness.instruction_composer import InstructionComposer
@@ -61,7 +61,14 @@ class MetaHarnessLoop:
 
     def run(self, project_id: str, config: ProjectConfig, max_runs: int = 3) -> ProjectResult:
         project_dir = self.filesystem.init_project(project_id, config.to_dict())
-        ledger = ExperimentLedger(project_dir / "experiments" / "ledger.sqlite3")
+        try:
+            ledger = ExperimentLedger(project_dir / "experiments" / "ledger.sqlite3")
+        except Exception as exc:  # noqa: BLE001
+            self.filesystem.write_halt(
+                project_id,
+                {"type": "LEDGER_CORRUPTION", "message": str(exc)},
+            )
+            raise
         manifold = ManifoldIndex(project_dir / "knowledge" / "manifold")
         optimizer = ParallelExperimentManager(project_dir / "runtime" / "sandboxes")
         ideation = IdeationOrchestrator(
@@ -104,18 +111,41 @@ class MetaHarnessLoop:
             )
             self.filesystem.write_instruction(project_id, run_n, instruction)
             task_node = decomposition.tasks[min(run_n - 1, len(decomposition.tasks) - 1)] if decomposition.tasks else None
-            execution = self.executor(
-                project_dir=project_dir,
-                run_n=run_n,
-                config=config,
-                task_node=task_node,
-                optimizer=optimizer,
-                ledger=ledger,
-                ideation=ideation,
-                oracle_resolver=OracleResolver(),
-                failed_iterations=failed_iterations,
-                taste_model=taste_model,
-            )
+            try:
+                execution = self.executor(
+                    project_dir=project_dir,
+                    run_n=run_n,
+                    config=config,
+                    task_node=task_node,
+                    optimizer=optimizer,
+                    ledger=ledger,
+                    ideation=ideation,
+                    oracle_resolver=OracleResolver(),
+                    failed_iterations=failed_iterations,
+                    taste_model=taste_model,
+                )
+            except ProviderRuntimeError as exc:
+                self.filesystem.write_halt(
+                    project_id,
+                    {
+                        "type": "PROVIDER_FAILURE",
+                        "message": str(exc),
+                        "run_n": run_n,
+                    },
+                )
+                result_summary = "halted due to provider failure"
+                break
+            except Exception as exc:  # noqa: BLE001
+                self.filesystem.write_halt(
+                    project_id,
+                    {
+                        "type": "UNHANDLED_RUNTIME_FAILURE",
+                        "message": str(exc),
+                        "run_n": run_n,
+                    },
+                )
+                result_summary = "halted due to unhandled runtime failure"
+                break
             run_dir = self.filesystem.get_run_dir(project_id, run_n)
             self.filesystem.write_json(run_dir / "trace.json", execution["trace"])
             self.filesystem.write_json(run_dir / "result.json", execution["result"])
@@ -176,6 +206,22 @@ class MetaHarnessLoop:
                 )
                 result_summary = "halted due to adversarial stalemate"
                 break
+        if (project_dir / "HALT.json").exists():
+            self.filesystem.write_project_state(
+                project_id,
+                {
+                    "status": "halted",
+                    "run_count": run_n,
+                    "last_run_status": result_summary,
+                },
+            )
+            return ProjectResult(
+                project_id=project_id,
+                status="halted",
+                paper_path=None,
+                run_count=run_n,
+                summary=result_summary,
+            )
         paper = PaperSynthesizer(self.filesystem.base_dir).synthesize(project_id)
         self._update_causal_dag(project_dir / "causal_dag.json", project_id)
         self.taste_persistence.save_after_project(project_id, taste_model)
