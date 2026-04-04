@@ -440,6 +440,7 @@ class MetaHarnessLoop:
             n=3,
             prior_metric=ledger.get_by_task(task_node.task_id)[0]["primary_metric"] if ledger.get_by_task(task_node.task_id) else 0.0,
             compute_budget=config.compute_budget,
+            ledger=ledger,
         )
 
     def _update_causal_dag(self, dag_path: Path, project_id: str) -> None:

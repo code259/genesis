@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from genesis.models import ExperimentProposal
+from genesis.storage.ledger import ExperimentLedger
 
 
 class ExperimentProposer:
@@ -11,7 +12,12 @@ class ExperimentProposer:
         *,
         prior_metric: float = 0.0,
         compute_budget: str = "local_gpu",
+        ledger: ExperimentLedger | None = None,
     ) -> list[ExperimentProposal]:
+        history = ledger.get_by_task(task_id)[:3] if ledger else []
+        prior_metric = max(
+            [prior_metric] + [float(item.get("primary_metric", 0.0)) for item in history]
+        )
         proposals: list[ExperimentProposal] = []
         for index in range(n):
             expected_metric = max(prior_metric, 0.35) + 0.05 * (index + 1)
