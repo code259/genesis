@@ -35,10 +35,19 @@ class ExperimentLedger:
                     status TEXT NOT NULL,
                     anomaly_score REAL NOT NULL,
                     timestamp TEXT NOT NULL,
-                    artifact_path TEXT NOT NULL
+                    artifact_path TEXT NOT NULL,
+                    trajectory_path TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(experiments)").fetchall()
+            }
+            if "trajectory_path" not in columns:
+                connection.execute(
+                    "ALTER TABLE experiments ADD COLUMN trajectory_path TEXT NOT NULL DEFAULT ''"
+                )
 
     def insert_experiment(
         self,
@@ -62,8 +71,8 @@ class ExperimentLedger:
                 INSERT OR REPLACE INTO experiments (
                     experiment_id, parent_experiment_id, task_id, code_hash, config_diff,
                     primary_metric, secondary_metrics, trajectory_summary, attribution_ablations,
-                    status, anomaly_score, timestamp, artifact_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, anomaly_score, timestamp, artifact_path, trajectory_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     result.experiment_id,
@@ -79,6 +88,7 @@ class ExperimentLedger:
                     result.anomaly_score,
                     timestamp,
                     result.artifact_path,
+                    result.trajectory_path,
                 ),
             )
 
@@ -142,6 +152,7 @@ class ExperimentLedger:
             anomaly_score,
             timestamp,
             artifact_path,
+            trajectory_path,
         ) = row
         return {
             "experiment_id": experiment_id,
@@ -157,4 +168,5 @@ class ExperimentLedger:
             "anomaly_score": anomaly_score,
             "timestamp": timestamp,
             "artifact_path": artifact_path,
+            "trajectory_path": trajectory_path,
         }

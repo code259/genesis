@@ -1,6 +1,7 @@
 from genesis.storage.causal_dag import CausalDAG
 from genesis.storage.filesystem import ProjectFilesystem
 from genesis.storage.ledger import ExperimentLedger
+from genesis.taste.persistence import TasteModelPersistence
 from genesis.models import ExperimentResult
 
 
@@ -26,10 +27,13 @@ def test_ledger_insert_and_query(tmp_path):
             status="keep",
             code_hash="abc",
             artifact_path="artifact.json",
+            trajectory_path="trajectory.npz",
         ),
         timestamp="2026-04-04T00:00:00Z",
     )
-    assert ledger.get_by_task("task-1")[0]["primary_metric"] == 0.9
+    record = ledger.get_by_task("task-1")[0]
+    assert record["primary_metric"] == 0.9
+    assert record["trajectory_path"] == "trajectory.npz"
 
 
 def test_causal_dag_cycle_detection(tmp_path):
@@ -40,3 +44,17 @@ def test_causal_dag_cycle_detection(tmp_path):
     except ValueError:
         return
     raise AssertionError("expected cycle detection")
+
+
+def test_taste_persistence_dedupes_project_data(tmp_path):
+    persistence = TasteModelPersistence(tmp_path / "taste_db")
+    persistence.merge_project_data(
+        "demo",
+        [
+            {"experiment_id": "exp-1", "primary_metric": 0.3},
+            {"experiment_id": "exp-1", "primary_metric": 0.8},
+        ],
+    )
+    dataset = __import__("json").loads((tmp_path / "taste_db" / "training_data.json").read_text())
+    assert len(dataset) == 1
+    assert dataset[0]["primary_metric"] == 0.8

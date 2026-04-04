@@ -9,6 +9,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional, Union
 
+import numpy as np
+
 from genesis.models import ExperimentResult, ensure_parent
 
 
@@ -65,6 +67,12 @@ class ExperimentRunner:
             }
         )
         artifact_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        trajectory_path = sandbox_dir / "trajectory.npz"
+        np.savez(
+            trajectory_path,
+            trajectory=np.asarray(trajectory, dtype=float),
+            runtime_seconds=np.asarray([runtime_seconds], dtype=float),
+        )
         code_hash = hashlib.sha1(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest()
         return ExperimentResult(
             experiment_id=experiment_id,
@@ -77,6 +85,7 @@ class ExperimentRunner:
             status=payload.get("status", "keep" if metric >= float(config.get("keep_threshold", 0.0)) else "discard"),
             code_hash=code_hash,
             artifact_path=str(artifact_path),
+            trajectory_path=str(trajectory_path),
             anomaly_score=float(config.get("anomaly_score", 0.0)),
         )
 
