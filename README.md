@@ -42,6 +42,7 @@ Start in `v1/`:
 
 ```bash
 cd v1
+python -m pip install -U pip setuptools wheel
 python -m pip install -e ".[dev,data,verification,paper]"
 python -m pytest -q
 python -m genesis.cli.main --help
@@ -56,6 +57,14 @@ Example:
 
 ```bash
 cd v1
+python -m pip install -U pip setuptools wheel
+python -m pip install -e ".[dev,data,verification,paper,ml,domain]"
+```
+
+If you are installing the `ml` extra in a fresh environment, Genesis currently expects a `NumPy 1.x` stack and a modern `torch` build. If you previously installed an incompatible mix, repair it with:
+
+```bash
+python -m pip install --upgrade --force-reinstall "numpy<2" "torch>=2.4" "sentence-transformers>=3.0"
 python -m pip install -e ".[dev,data,verification,paper,ml,domain]"
 ```
 

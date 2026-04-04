@@ -69,3 +69,5 @@ def test_dependency_manifest_tracks_required_spec_groups():
     assert '"pytest-asyncio>=0.23"' in pyproject
     assert '"alembic>=1.13"' in pyproject
     assert '"bibtexparser>=1.4,<2"' in pyproject
+    assert '"numpy>=1.26,<2"' in pyproject
+    assert '"torch>=2.4"' in pyproject
