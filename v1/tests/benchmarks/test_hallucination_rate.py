@@ -26,6 +26,7 @@ def _flagged(report) -> bool:
 
 
 def test_hallucination_rate_benchmark(monkeypatch):
+    monkeypatch.setenv("GENESIS_CACHE_ROOT", "/tmp/genesis-hallucination-cache")
     monkeypatch.setattr(
         "genesis.modules.adversarial.literature.LiteratureCrossExaminer.verify_claim",
         lambda self, claim: __import__("types").SimpleNamespace(
