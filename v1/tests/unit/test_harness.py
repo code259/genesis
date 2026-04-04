@@ -4,6 +4,7 @@ from genesis.harness.instruction_composer import InstructionComposer
 from genesis.harness.token_budget import TokenBudget
 from genesis.models import TaskNode, TaskTree
 import pytest
+from genesis.harness.loop import MetaHarnessLoop
 
 
 def test_token_budget_trims():
@@ -76,3 +77,32 @@ def test_decomposer_rejects_unknown_dependencies():
                 ],
             )
         )
+
+
+def test_harness_requested_modules_expand_on_escalation(tmp_path):
+    loop = MetaHarnessLoop(
+        projects_root=tmp_path / "projects",
+        taste_root=tmp_path / "taste_db",
+        executor=lambda **kwargs: {},
+    )
+    config = ProjectConfig(
+        research_question="Q",
+        domain="astrophysics",
+        compute_budget="local_gpu",
+        time_budget_hours=1,
+        domain_knowledge_model="none",
+        output_dir="projects",
+    )
+    task = TaskNode(
+        task_id="task",
+        description="desc",
+        acceptance_criteria=[],
+        oracle_checks=[],
+        estimated_compute_budget="local_gpu",
+        requires_ml_optimizer=True,
+    )
+    modules = loop._requested_modules(config=config, task_node=task, failed_iterations=3)
+    assert "optimizer" in modules
+    assert "ideation" in modules
+    assert "oracle" in modules
+    assert "domain_knowledge" in modules

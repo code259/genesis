@@ -35,6 +35,9 @@ from .history_reader import SelectiveHistoryReader
 
 
 class MetaHarnessLoop:
+    ADVERSARIAL_ITERATION_LIMIT = 3
+    ESCALATION_RETRY_LIMIT = 2
+
     def __init__(
         self,
         *,
@@ -89,6 +92,7 @@ class MetaHarnessLoop:
         oracle_path.write_text(oracle_source, encoding="utf-8")
         taste_model = self.taste_persistence.load_for_project(project_id, project_dir / "knowledge" / "taste_snapshot.json")
         failed_iterations = 0
+        redirect_message = ""
 
         result_summary = "unfinished"
         for run_n in range(1, max_runs + 1):
@@ -98,19 +102,36 @@ class MetaHarnessLoop:
                     result_summary = "stopped by human intervention"
                     self.filesystem.clear_human_intervention(project_id)
                     break
+                if intervention.get("type") == "APPROVE":
+                    failed_iterations = 0
+                    redirect_message = ""
+                if intervention.get("type") == "REDIRECT":
+                    redirect_message = str(intervention.get("message", "")).strip()
                 if intervention.get("type") == "REJECT":
                     failed_iterations += 1
                 self.filesystem.clear_human_intervention(project_id)
+            task_node = decomposition.tasks[min(run_n - 1, len(decomposition.tasks) - 1)] if decomposition.tasks else None
+            budget_allocations = self.token_budget.allocate(
+                128000 if "cloud" in config.compute_budget.lower() or "groq" in config.compute_budget.lower() else 18000
+            )
             history = self.history_reader.summarize_experiment_history(project_id)
+            requested_modules = self._requested_modules(config=config, task_node=task_node, failed_iterations=failed_iterations)
+            current_task_context = self._task_context(
+                config=config,
+                run_n=run_n,
+                failed_iterations=failed_iterations,
+                redirect_message=redirect_message,
+            )
             instruction = self.composer.compose(
                 config=config,
                 belief_summary=f"tracked_experiments={len(ledger.get_pareto_frontier())}",
                 retrieved_history=history,
                 domain_context=domain_context,
-                current_task_context=f"Run {run_n} for {config.research_question}",
+                current_task_context=current_task_context,
+                budget_allocations=budget_allocations,
+                requested_modules=requested_modules,
             )
             self.filesystem.write_instruction(project_id, run_n, instruction)
-            task_node = decomposition.tasks[min(run_n - 1, len(decomposition.tasks) - 1)] if decomposition.tasks else None
             try:
                 execution = self.executor(
                     project_dir=project_dir,
@@ -171,6 +192,7 @@ class MetaHarnessLoop:
             if self._check_stopping_criteria(report) and verification["passed"]:
                 result_summary = "stopping criteria satisfied"
                 failed_iterations = 0
+                redirect_message = ""
                 self.filesystem.write_project_state(
                     project_id,
                     {
@@ -181,14 +203,29 @@ class MetaHarnessLoop:
                 )
                 break
             failed_iterations += 1
+            escalation_attempts = max(0, failed_iterations - self.ADVERSARIAL_ITERATION_LIMIT)
             self.filesystem.write_project_state(
                 project_id,
                 {
                     "status": "running",
                     "run_count": run_n,
+                    "escalation_attempts": escalation_attempts,
                     "last_run_status": report.stopping_decision.to_dict(),
                 },
             )
+            if failed_iterations >= self.ADVERSARIAL_ITERATION_LIMIT:
+                redirect_message = (
+                    "Change approach: prior attempts failed verification/adversarial gating. "
+                    "Use a materially different tactic and surface the rationale."
+                )
+                self.filesystem.write_json(
+                    run_dir / "escalation_report.json",
+                    {
+                        "failed_iterations": failed_iterations,
+                        "escalation_attempts": escalation_attempts,
+                        "message": redirect_message,
+                    },
+                )
             if failed_iterations >= 5:
                 ideas = ideation.run(
                     config.research_question,
@@ -199,12 +236,12 @@ class MetaHarnessLoop:
                     run_dir / "ideation_report.json",
                     {"ideas": [idea.to_dict() for idea in ideas]},
                 )
-            if failed_iterations >= 7:
+            if escalation_attempts >= self.ESCALATION_RETRY_LIMIT:
                 self.filesystem.write_halt(
                     project_id,
                     {
                         "type": "ADVERSARIAL_STALEMATE",
-                        "message": "Exceeded iterative recovery threshold.",
+                        "message": "Exceeded adversarial retry threshold after escalation.",
                         "run_n": run_n,
                     },
                 )
@@ -446,3 +483,31 @@ class MetaHarnessLoop:
     def _update_causal_dag(self, dag_path: Path, project_id: str) -> None:
         dag = CausalDAG(dag_path)
         dag.add_edge("instruction", "result", effect_size=1.0, confidence=0.9, experiment_ids=[project_id])
+
+    def _requested_modules(self, *, config: ProjectConfig, task_node: Any, failed_iterations: int) -> list[str]:
+        modules = ["verification", "adversarial", "paper"]
+        if task_node and getattr(task_node, "requires_ml_optimizer", False):
+            modules.append("optimizer")
+        if failed_iterations >= self.ADVERSARIAL_ITERATION_LIMIT:
+            modules.append("ideation")
+        if config.domain.lower() == "astrophysics":
+            modules.extend(["oracle", "domain_knowledge"])
+        return sorted(set(modules))
+
+    def _task_context(
+        self,
+        *,
+        config: ProjectConfig,
+        run_n: int,
+        failed_iterations: int,
+        redirect_message: str,
+    ) -> str:
+        context = f"Run {run_n} for {config.research_question}"
+        if redirect_message:
+            context += f"\nRedirect: {redirect_message}"
+        if failed_iterations >= self.ADVERSARIAL_ITERATION_LIMIT:
+            context += (
+                "\nEscalation: prior attempts did not satisfy adversarial/verification gates; "
+                "a different approach is required."
+            )
+        return context
