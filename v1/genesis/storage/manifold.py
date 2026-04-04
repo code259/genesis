@@ -10,6 +10,10 @@ from typing import Any, Optional, Union
 
 from genesis.models import ensure_parent
 
+try:
+    import chromadb
+except Exception:  # pragma: no cover - optional backend
+    chromadb = None
 
 def _cosine_distance(left: list[float], right: list[float]) -> float:
     if not left or not right:
@@ -27,11 +31,17 @@ class ManifoldIndex:
         self.root_dir = Path(root_dir)
         self.papers_path = self.root_dir / "papers.json"
         self.experiments_path = self.root_dir / "experiments.json"
+        self.backend = "chromadb" if chromadb is not None else "json"
         ensure_parent(self.papers_path)
-        if not self.papers_path.exists():
-            self._save(self.papers_path, [])
-        if not self.experiments_path.exists():
-            self._save(self.experiments_path, [])
+        if self.backend == "chromadb":
+            self.client = chromadb.PersistentClient(path=str(self.root_dir))
+            self.papers_collection = self.client.get_or_create_collection("papers")
+            self.experiments_collection = self.client.get_or_create_collection("experiments")
+        else:
+            if not self.papers_path.exists():
+                self._save(self.papers_path, [])
+            if not self.experiments_path.exists():
+                self._save(self.experiments_path, [])
 
     def add_paper(self, paper: dict[str, Any]) -> None:
         self._upsert_item(paper, collection="papers")
@@ -48,6 +58,28 @@ class ManifoldIndex:
         collection: str = "papers",
         exclude_ids: Optional[set[str]] = None,
     ) -> list[dict[str, Any]]:
+        if self.backend == "chromadb":
+            collection_obj = self._collection_for(collection)
+            result = collection_obj.query(
+                query_embeddings=[query],
+                n_results=k,
+                include=["metadatas", "distances", "embeddings"],
+            )
+            items: list[dict[str, Any]] = []
+            ids = result.get("ids", [[]])[0]
+            metadatas = result.get("metadatas", [[]])[0]
+            distances = result.get("distances", [[]])[0]
+            embeddings = result.get("embeddings", [[]])[0]
+            exclude_ids = exclude_ids or set()
+            for item_id, metadata, distance, embedding in zip(ids, metadatas, distances, embeddings):
+                if item_id in exclude_ids:
+                    continue
+                item = dict(metadata or {})
+                item["distance"] = float(distance)
+                item["embedding"] = list(embedding or [])
+                if distance_threshold is None or item["distance"] <= distance_threshold:
+                    items.append(item)
+            return items[:k]
         items = self._load(self._path_for_collection(collection))
         exclude_ids = exclude_ids or set()
         ranked = sorted(
@@ -66,6 +98,13 @@ class ManifoldIndex:
         return ranked[:k]
 
     def get_density_score(self, point_id: str) -> float:
+        if self.backend == "chromadb":
+            for collection_name in ("papers", "experiments"):
+                collection_obj = self._collection_for(collection_name)
+                result = collection_obj.get(ids=[point_id], include=["metadatas"])
+                if result.get("ids"):
+                    metadata = result.get("metadatas", [{}])[0] or {}
+                    return float(metadata.get("density_score", 0.0))
         for collection in ("papers", "experiments"):
             for item in self._load(self._path_for_collection(collection)):
                 if self._item_id(item, collection=collection) == point_id:
@@ -87,9 +126,13 @@ class ManifoldIndex:
         }
 
     def all_papers(self) -> list[dict[str, Any]]:
+        if self.backend == "chromadb":
+            return self._all_from_collection("papers")
         return self._load(self.papers_path)
 
     def all_experiments(self) -> list[dict[str, Any]]:
+        if self.backend == "chromadb":
+            return self._all_from_collection("experiments")
         return self._load(self.experiments_path)
 
     def attempted_sources(self) -> set[str]:
@@ -117,6 +160,19 @@ class ManifoldIndex:
         return items
 
     def upsert_collection(self, items: list[dict[str, Any]], *, collection: str = "papers") -> None:
+        if self.backend == "chromadb":
+            collection_obj = self._collection_for(collection)
+            ids = []
+            metadatas = []
+            embeddings = []
+            for item in items:
+                normalized = self._normalize_item(item, collection=collection)
+                ids.append(self._item_id(normalized, collection=collection))
+                embeddings.append(normalized.get("embedding") or normalized.get("latent_z") or [])
+                metadatas.append({k: v for k, v in normalized.items() if k not in {"embedding", "latent_z"}})
+            if ids:
+                collection_obj.upsert(ids=ids, metadatas=metadatas, embeddings=embeddings)
+            return
         path = self._path_for_collection(collection)
         indexed = {
             self._item_id(item, collection=collection): self._normalize_item(item, collection=collection)
@@ -167,6 +223,25 @@ class ManifoldIndex:
 
     def _path_for_collection(self, collection: str) -> Path:
         return self.papers_path if collection == "papers" else self.experiments_path
+
+    def _collection_for(self, collection: str):
+        return self.papers_collection if collection == "papers" else self.experiments_collection
+
+    def _all_from_collection(self, collection: str) -> list[dict[str, Any]]:
+        collection_obj = self._collection_for(collection)
+        result = collection_obj.get(include=["metadatas", "embeddings"])
+        items: list[dict[str, Any]] = []
+        for item_id, metadata, embedding in zip(
+            result.get("ids", []),
+            result.get("metadatas", []),
+            result.get("embeddings", []),
+        ):
+            payload = dict(metadata or {})
+            key = "paper_id" if collection == "papers" else "experiment_id"
+            payload[key] = item_id
+            payload["embedding"] = list(embedding or [])
+            items.append(payload)
+        return items
 
     def _item_id(self, item: dict[str, Any], *, collection: str) -> str:
         if collection == "papers":
