@@ -33,6 +33,7 @@ def test_citations_plotting_and_verification(tmp_path):
     citations = CitationsAgent(tmp_path / "cache" / "citations.json")
     bibtex = citations.format_bibtex({"title": "A test paper", "year": 2026})
     assert "@article" in bibtex
+    assert citations.search_title("A test paper") is not None
 
     plotting = PlottingModule(tmp_path / "figures")
     figure = plotting.generate_figure(
@@ -44,6 +45,7 @@ def test_citations_plotting_and_verification(tmp_path):
         )
     )
     assert Path(figure.pdf_path).exists()
+    assert figure.metadata["pdf_path"].endswith(".pdf")
 
     verification = VerificationPipeline()
     output_dir = tmp_path / "outputs"

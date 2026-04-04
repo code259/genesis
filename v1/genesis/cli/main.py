@@ -10,6 +10,7 @@ import click
 
 from genesis.config import ProjectConfig, load_project_config
 from genesis.harness.loop import MetaHarnessLoop
+from genesis.storage.filesystem import ProjectFilesystem
 
 
 @click.group()
@@ -69,11 +70,14 @@ def status_project(project_id: str, root_dir: Path) -> None:
     if not project_dir.exists():
         click.echo("missing")
         return
+    filesystem = ProjectFilesystem(root_dir)
+    state = filesystem.read_project_state(project_id)
     payload = {
         "project_id": project_id,
         "runs": len(list((project_dir / "runs").glob("*"))),
         "has_halt": (project_dir / "HALT.json").exists(),
         "has_paper": (project_dir / "outputs" / "paper" / "main.tex").exists(),
+        "state": state,
     }
     click.echo(json.dumps(payload, indent=2))
 
@@ -94,9 +98,14 @@ def intervene(project_id: str, intervention_type: str, root_dir: Path) -> None:
 @click.option("--root", "root_dir", type=click.Path(path_type=Path), default=Path("projects"))
 def results(project_id: str, root_dir: Path) -> None:
     project_dir = root_dir / project_id / "outputs"
+    paper_dir = project_dir / "paper"
+    run_index_path = paper_dir / "run_index.json"
+    citation_flags_path = paper_dir / "citation_flags.json"
     payload = {
-        "paper_dir": str(project_dir / "paper"),
+        "paper_dir": str(paper_dir),
         "code_dir": str(project_dir / "code"),
+        "run_index": json.loads(run_index_path.read_text(encoding="utf-8")) if run_index_path.exists() else [],
+        "citation_flags": json.loads(citation_flags_path.read_text(encoding="utf-8")) if citation_flags_path.exists() else [],
     }
     click.echo(json.dumps(payload, indent=2))
 

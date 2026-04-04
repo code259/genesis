@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -42,6 +43,15 @@ class ScholarlyClient:
         data = payload.get("data", []) if isinstance(payload, dict) else []
         self._set_cache(cache_key, data)
         return data
+
+    def search_title(self, title: str) -> list[dict[str, Any]]:
+        results = self.search_semantic_scholar(title, limit=5)
+        if results:
+            return results
+        results = self.search_crossref(title, limit=5)
+        if results:
+            return results
+        return self.search_arxiv(title, limit=5)
 
     def get_paper(self, paper_id: str) -> dict[str, Any]:
         cache_key = self._cache_key("s2_paper", {"paper_id": paper_id})
@@ -165,7 +175,15 @@ class ScholarlyClient:
             return {}
 
     def _save_cache(self, payload: dict[str, Any]) -> None:
-        self.cache_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            "w",
+            delete=False,
+            dir=str(self.cache_path.parent),
+            encoding="utf-8",
+        ) as handle:
+            handle.write(json.dumps(payload, indent=2))
+            temp_name = handle.name
+        os.replace(temp_name, self.cache_path)
 
     def _get_cache(self, key: str) -> Any:
         return self._load_cache().get(key)

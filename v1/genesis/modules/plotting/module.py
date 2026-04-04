@@ -58,6 +58,9 @@ class PlottingModule:
             "axis_labels": spec.axis_labels,
             "style": spec.style,
             "data_points": len(y_values) if y_values else len(x_values),
+            "data_source": str(spec.data_source) if isinstance(spec.data_source, str) else "inline",
+            "pdf_path": str(pdf_path),
+            "png_path": str(png_path),
         }
         (self.output_root / f"{stem}.metadata.json").write_text(
             json.dumps(metadata, indent=2),

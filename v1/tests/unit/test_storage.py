@@ -11,6 +11,7 @@ def test_filesystem_init_and_results(tmp_path):
     run_dir = fs.get_run_dir("demo", 1)
     fs.write_json(run_dir / "result.json", {"primary_metric": 0.8})
     assert fs.list_all_results("demo")[0]["primary_metric"] == 0.8
+    assert fs.read_project_state("demo")["status"] == "initialized"
 
 
 def test_ledger_insert_and_query(tmp_path):
