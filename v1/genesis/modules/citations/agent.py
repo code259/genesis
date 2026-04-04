@@ -66,12 +66,14 @@ class CitationsAgent:
         }
         if not citation_keys:
             return []
-        available_keys = {
-            match.group(1).strip()
-            for match in re.finditer(r"@[\w]+\{([^,]+),", references_bib)
-        }
-        missing = sorted(citation_keys - available_keys)
-        return [{"flag": "NOT_VERIFIED", "citation_key": key} for key in missing]
+        entries = self._parse_bibtex_entries(references_bib)
+        available_keys = set(entries)
+        flags = [{"flag": "NOT_VERIFIED", "citation_key": key} for key in sorted(citation_keys - available_keys)]
+        for key, metadata in entries.items():
+            verification = self.verify_citation(metadata)
+            if not verification["verified"]:
+                flags.append({"flag": "NOT_VERIFIED", "citation_key": key, "evidence": verification["evidence"]})
+        return flags
 
     def search_crossref(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
         return self.client.search_crossref(query, limit=limit)
@@ -84,3 +86,14 @@ class CitationsAgent:
         left_norm = normalize(left)
         right_norm = normalize(right)
         return bool(left_norm) and (left_norm == right_norm or left_norm in right_norm or right_norm in left_norm)
+
+    def _parse_bibtex_entries(self, references_bib: str) -> dict[str, dict[str, Any]]:
+        entries: dict[str, dict[str, Any]] = {}
+        pattern = re.compile(r"@[\w]+\{([^,]+),\s*(.*?)\n\}", re.DOTALL)
+        field_pattern = re.compile(r"(\w+)\s*=\s*\{([^}]*)\}")
+        for match in pattern.finditer(references_bib):
+            key = match.group(1).strip()
+            body = match.group(2)
+            metadata = {field: value for field, value in field_pattern.findall(body)}
+            entries[key] = metadata
+        return entries

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from typing import Union
 
@@ -9,8 +10,16 @@ from genesis.models import CheckResult, OracleResult
 
 class FormalConsistencyChecker:
     def check_parameter_count(self, code_path: Union[str, Path], claimed_params: int) -> CheckResult:
-        text = Path(code_path).read_text(encoding="utf-8") if Path(code_path).exists() else ""
-        observed = text.count("def ") + text.count("class ")
+        payload_path = Path(code_path)
+        observed = 0
+        if payload_path.exists():
+            if payload_path.suffix == ".json":
+                payload = json.loads(payload_path.read_text(encoding="utf-8"))
+                config = payload.get("config", {}) if isinstance(payload, dict) else {}
+                observed = int(config.get("model_parameter_count", 0))
+            else:
+                text = payload_path.read_text(encoding="utf-8")
+                observed = text.count("def ") + text.count("class ")
         passed = observed <= claimed_params if claimed_params > 0 else True
         return CheckResult(
             name="parameter_count",

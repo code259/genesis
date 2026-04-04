@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Optional
 
 from genesis.models import AdversarialReport, CheckResult, StoppingDecision
 
@@ -71,4 +72,3 @@ class AdversarialOrchestrator:
         )
         reasons = ["all stopping criteria satisfied"] if should_stop else ["continue iteration"]
         return StoppingDecision(should_stop=should_stop, reasons=reasons, critical_flags=critical_flags)
-from typing import Optional
