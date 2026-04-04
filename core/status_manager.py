@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from core.cache_manager import cache_summary
+from core.project_runtime import runtime_status
 from core.provider_runtime import runtime_summary
 
 
@@ -11,6 +12,7 @@ def build_project_status(project_path: Path) -> dict:
     project_config = _read_json(project_path / "project_config.json", {})
     tasks = _read_json(project_path / "tasks.json", [])
     run_state = _read_json(project_path / "run_state.json", {})
+    runtime = runtime_status(project_path)
 
     task_statuses = []
     counts = {}
@@ -57,6 +59,7 @@ def build_project_status(project_path: Path) -> dict:
         "active_workers": active_workers,
         "recent_actions": recent_actions,
         "provider_runtime": runtime_summary(),
+        "runtime": runtime,
         "cache": cache_summary(),
         "paper": paper_summary,
         "run_state": run_state,
@@ -104,6 +107,13 @@ def write_dashboard(project_path: Path) -> Path:
             f"- Last provider error: {status['provider_runtime']['last_error']}",
             f"- Request count: {status['provider_runtime']['request_count']}",
             f"- Estimated max tokens: {status['provider_runtime']['estimated_max_tokens']}",
+            "",
+            "## Runtime",
+            f"- Backend: {status['runtime']['backend']}",
+            f"- Container state: {status['runtime']['container_state']}",
+            f"- Image: {status['runtime']['image_tag']}",
+            f"- Last runtime error: {status['runtime']['last_error']}",
+            f"- Last used at: {status['runtime']['last_used_at']}",
             "",
             "## Cache",
             f"- Hits: {status['cache']['hits']}",

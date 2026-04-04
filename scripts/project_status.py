@@ -15,6 +15,7 @@ def main(project_id: str):
     print(f"Project: {status['project'].get('title')}")
     print(f"Current stage: {status.get('current_stage')}")
     print(f"Task counts: {status.get('task_counts')}")
+    print(f"Runtime: {status.get('runtime', {}).get('container_state')}")
     print(f"Next required human action: {status.get('next_required_human_action')}")
     print(f"Status written to: {status_path}")
     print(f"Dashboard written to: {dashboard_path}")

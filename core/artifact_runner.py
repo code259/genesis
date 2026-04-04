@@ -2,9 +2,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 import os
-import subprocess
-import sys
 
+from core import project_runtime
 from core import runtime_policy
 from core.task_parser import extract_stage
 
@@ -47,12 +46,14 @@ def run_python_task(task_spec: dict, project_path: Path, execution_plan: dict) -
     env["GENESIS_ARTIFACT_DIR"] = str(task_dir)
     env["GENESIS_RESULTS_PATH"] = str(results_path)
 
-    process = subprocess.run(
-        [sys.executable, str(script_path)],
-        cwd=str(task_dir),
-        capture_output=True,
-        text=True,
-        env=env,
+    process = project_runtime.run_in_runtime(
+        project_path,
+        task_spec["id"],
+        script_path,
+        {
+            "GENESIS_ARTIFACT_DIR": str(task_dir.relative_to(project_path)),
+            "GENESIS_RESULTS_PATH": str(results_path.relative_to(project_path)),
+        },
     )
 
     expected = []
