@@ -1,0 +1,18 @@
+{
+  "description": "Groq prototype configuration for Genesis v1",
+  "providers": {
+    "sisyphus": {
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile",
+      "fallbacks": ["llama-3.1-8b-instant"]
+    },
+    "fast": {
+      "provider": "groq",
+      "model": "llama-3.1-8b-instant"
+    }
+  },
+  "token_budget": {
+    "context_window": 128000,
+    "retrieved_history": 20000
+  }
+}

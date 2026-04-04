@@ -1,0 +1,18 @@
+{
+  "description": "Local prototype configuration for Genesis v1",
+  "providers": {
+    "sisyphus": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:14b",
+      "fallbacks": ["llama3.3:70b", "llama3.2:3b"]
+    },
+    "fast": {
+      "provider": "ollama",
+      "model": "llama3.2:3b"
+    }
+  },
+  "token_budget": {
+    "context_window": 16000,
+    "retrieved_history": 8000
+  }
+}

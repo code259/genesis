@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genesis-v1"
+version = "0.1.0"
+description = "Genesis v1 autonomous research system prototype"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "click>=8.0",
+  "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+ml = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "torch>=2.1",
+  "sentence-transformers>=3.0",
+  "torch-geometric>=2.5",
+]
+data = [
+  "chromadb>=0.5",
+  "sqlalchemy>=2.0",
+]
+paper = [
+  "matplotlib>=3.8",
+  "pylatex>=1.4",
+]
+domain = [
+  "astropy>=6.0",
+]
+
+[project.scripts]
+genesis = "genesis.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["genesis*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

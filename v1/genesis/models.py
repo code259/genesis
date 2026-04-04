@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+
+@dataclass
+class TaskNode:
+    task_id: str
+    description: str
+    acceptance_criteria: list[str]
+    oracle_checks: list[str]
+    estimated_compute_budget: str
+    dependencies: list[str] = field(default_factory=list)
+    success_metric: str = ""
+    requires_ml_optimizer: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class TaskTree:
+    root_id: str
+    tasks: list[TaskNode]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"root_id": self.root_id, "tasks": [task.to_dict() for task in self.tasks]}
+
+
+@dataclass
+class OracleResult:
+    pass_rate: float
+    failures: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    is_critical_fail: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class CheckResult:
+    name: str
+    passed: bool
+    evidence: list[str] = field(default_factory=list)
+    score: Optional[float] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class StoppingDecision:
+    should_stop: bool
+    reasons: list[str]
+    critical_flags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class AdversarialReport:
+    claim_flags: list[str] = field(default_factory=list)
+    literature_flags: list[str] = field(default_factory=list)
+    formal_checks: list[CheckResult] = field(default_factory=list)
+    acceptance_ratio: float = 0.0
+    grounded_claims: int = 0
+    total_claims: int = 0
+    stopping_decision: StoppingDecision = field(
+        default_factory=lambda: StoppingDecision(False, ["not evaluated"])
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["formal_checks"] = [check.to_dict() for check in self.formal_checks]
+        payload["stopping_decision"] = self.stopping_decision.to_dict()
+        return payload
+
+
+@dataclass
+class ExperimentResult:
+    experiment_id: str
+    task_id: str
+    primary_metric: float
+    secondary_metrics: dict[str, float]
+    trajectory: list[float]
+    peak_memory: float
+    runtime_seconds: float
+    status: str
+    code_hash: str
+    artifact_path: str
+    anomaly_score: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ExperimentProposal:
+    description: str
+    code_diff: str
+    expected_metric: float
+    expected_trajectory: list[float]
+    compute_budget: str
+    model_parameter_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class Idea:
+    title: str
+    summary: str
+    source: str
+    landing_point: list[float] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class IdeaScore:
+    novelty: float
+    tractability: float
+    connection_quality: float
+    taste_prediction: float
+    composite_score: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ScoredIdea:
+    idea: Idea
+    score: IdeaScore
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"idea": self.idea.to_dict(), "score": self.score.to_dict()}
+
+
+@dataclass
+class FigureSpec:
+    figure_type: str
+    data_source: Union[str, List[float], Dict[str, Any]]
+    axis_labels: List[str]
+    title: str
+    style: str = "publication"
+
+
+@dataclass
+class FigureResult:
+    pdf_path: str
+    png_path: str
+    metadata: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ProjectResult:
+    project_id: str
+    status: str
+    paper_path: Optional[str] = None
+    run_count: int = 0
+    summary: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
