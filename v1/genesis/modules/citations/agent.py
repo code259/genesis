@@ -38,6 +38,9 @@ class CitationsAgent:
     def search_semantic_scholar(self, query: str) -> list[dict[str, Any]]:
         return self.client.search_semantic_scholar(query)
 
+    def search_title(self, title: str) -> list[dict[str, Any]]:
+        return self.client.search_title(title)
+
     def format_bibtex(self, metadata: dict[str, Any]) -> str:
         title = metadata.get("title", "")
         authors = metadata.get("authors", [])
