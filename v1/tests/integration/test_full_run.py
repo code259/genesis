@@ -2,10 +2,24 @@ import json
 
 from click.testing import CliRunner
 
+from genesis.agents.runtime import CodingAgentRuntime
 from genesis.cli.main import main
 
 
 def test_full_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        CodingAgentRuntime,
+        "generate_task",
+        lambda self, **kwargs: {
+            "summary": "Provider executed task successfully.",
+            "artifact_plan": [{"path": "notes.md", "content": "generated note"}],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+        },
+    )
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(
         json.dumps(
@@ -30,6 +44,19 @@ def test_full_run(tmp_path, monkeypatch):
 
 
 def test_init_and_status_commands(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        CodingAgentRuntime,
+        "generate_task",
+        lambda self, **kwargs: {
+            "summary": "Provider executed task successfully.",
+            "artifact_plan": [{"path": "notes.md", "content": "generated note"}],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+        },
+    )
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(
         json.dumps(

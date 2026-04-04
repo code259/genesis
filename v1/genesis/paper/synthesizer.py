@@ -5,7 +5,9 @@ import subprocess
 from pathlib import Path
 from typing import Union
 
+from genesis.models import FigureSpec
 from genesis.modules.citations.agent import CitationsAgent
+from genesis.modules.plotting.module import PlottingModule
 
 
 class PaperSynthesizer:
@@ -28,6 +30,7 @@ class PaperSynthesizer:
         tex = template.replace("{{TITLE}}", f"Genesis results for {project_id}")
         tex = tex.replace("{{ABSTRACT}}", sections["abstract"])
         tex = tex.replace("{{BODY}}", sections["body"])
+        tex = tex.replace("{{FIGURE_BLOCK}}", sections["figure_block"])
         tex_path = paper_dir / "main.tex"
         tex_path.write_text(tex, encoding="utf-8")
         citation_flags = citations.verify_all_in_latex(tex, references.read_text(encoding="utf-8"))
@@ -75,6 +78,7 @@ class PaperSynthesizer:
             return {
                 "abstract": "No verified results were available at synthesis time.",
                 "body": "The project did not produce runnable outputs before synthesis.",
+                "figure_block": "",
             }
         top_metric = max(item["result"].get("primary_metric", 0.0) for item in results)
         verified_runs = sum(1 for item in results if item["verification"].get("passed"))
@@ -94,7 +98,8 @@ class PaperSynthesizer:
                 + f"Primary metric: {result.get('primary_metric', 0.0)}\\\\\n"
                 + f"Verification passed: {item['verification'].get('passed', False)}\n"
             )
-        return {"abstract": abstract, "body": "\n".join(body_lines)}
+        figure_block = self._build_figure_block(project_dir, results)
+        return {"abstract": abstract, "body": "\n".join(body_lines), "figure_block": figure_block}
 
     def _collect_reference_metadata(self, project_dir: Path, citations: CitationsAgent) -> list[dict[str, object]]:
         spec_path = project_dir / "spec.json"
@@ -109,6 +114,37 @@ class PaperSynthesizer:
         if not references:
             references.append({"title": "Genesis v1", "year": 2026, "authors": [{"name": "Genesis"}]})
         return references
+
+    def _build_figure_block(self, project_dir: Path, results: list[dict[str, object]]) -> str:
+        trajectory = None
+        for item in results:
+            selected = item["result"].get("selected_experiment") if isinstance(item.get("result"), dict) else None
+            if isinstance(selected, dict) and selected.get("trajectory"):
+                trajectory = selected["trajectory"]
+                break
+        if not trajectory:
+            metrics = [item["result"].get("primary_metric", 0.0) for item in results if isinstance(item.get("result"), dict)]
+            if len(metrics) > 1:
+                trajectory = metrics
+        if not trajectory:
+            return ""
+        plotting = PlottingModule(project_dir / "outputs" / "paper" / "figures")
+        figure = plotting.generate_figure(
+            FigureSpec(
+                figure_type="line",
+                data_source={"y": trajectory},
+                axis_labels=["Iteration", "Metric"],
+                title="trajectory_overview",
+            )
+        )
+        relative_pdf = Path(figure.pdf_path).relative_to(project_dir / "outputs" / "paper")
+        return (
+            "\\section{Figures}\n"
+            "\\begin{figure}[h]\n\\centering\n"
+            f"\\includegraphics[width=0.8\\linewidth]{{{relative_pdf.as_posix()}}}\n"
+            "\\caption{Metric trajectory across the best available results.}\n"
+            "\\end{figure}\n"
+        )
 
     def _write_minimal_pdf(self, pdf_path: Path, lines: list[str]) -> None:
         escaped_lines = []

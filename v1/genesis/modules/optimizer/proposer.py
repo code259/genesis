@@ -15,10 +15,11 @@ class ExperimentProposer:
         proposals: list[ExperimentProposal] = []
         for index in range(n):
             expected_metric = max(prior_metric, 0.35) + 0.05 * (index + 1)
+            warmup_ratio = round(0.2 + 0.1 * index, 2)
             proposals.append(
                 ExperimentProposal(
                     description=f"Experiment variant {index + 1} for task {task_id}",
-                    code_diff=f"tune variant {index + 1}",
+                    code_diff=f"learning_rate=0.{index + 2}; warmup_ratio={warmup_ratio}",
                     expected_metric=round(expected_metric, 4),
                     expected_trajectory=[
                         round(expected_metric * 0.35, 4),

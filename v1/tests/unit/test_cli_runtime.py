@@ -2,10 +2,24 @@ import json
 
 from click.testing import CliRunner
 
+from genesis.agents.runtime import CodingAgentRuntime
 from genesis.cli.main import main
 
 
 def test_cli_status_results_and_intervention(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        CodingAgentRuntime,
+        "generate_task",
+        lambda self, **kwargs: {
+            "summary": "Provider executed task successfully.",
+            "artifact_plan": [{"path": "notes.md", "content": "generated note"}],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+        },
+    )
     spec_path = tmp_path / "spec.json"
     project_root = tmp_path / "projects"
     spec_path.write_text(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional, Union
 
+from genesis.agents.runtime import CodingAgentRuntime
 from genesis.config import ProjectConfig
 from genesis.domain_knowledge.registry import DomainKnowledgeRegistry
 from genesis.harness.instruction_composer import InstructionComposer
@@ -53,6 +54,9 @@ class MetaHarnessLoop:
         self.domain_registry = DomainKnowledgeRegistry()
         self.verification = VerificationPipeline()
         self.feature_extractor = ExperimentFeatureExtractor()
+        self.agent_runtime = CodingAgentRuntime(
+            Path(__file__).resolve().parents[2] / ".opencode" / "oh-my-openagent.jsonc"
+        )
         self.executor = executor or self._default_executor
 
     def run(self, project_id: str, config: ProjectConfig, max_runs: int = 3) -> ProjectResult:
@@ -210,6 +214,18 @@ class MetaHarnessLoop:
         artifact_dir = project_dir / "outputs" / "code" / f"run_{run_n}"
         artifact_dir.mkdir(parents=True, exist_ok=True)
         summary_parts = [f"Run {run_n} investigates {active_task}."]
+        agent_result = self.agent_runtime.generate_task(
+            category="sisyphus",
+            instruction=f"Execute research task: {active_task}",
+            context={
+                "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
+                "research_question": config.research_question,
+                "domain": config.domain,
+                "success_criteria": config.success_criteria,
+                "failed_iterations": failed_iterations,
+            },
+            budget={"max_runs": 1, "compute_budget": config.compute_budget},
+        )
         if task_node and getattr(task_node, "requires_ml_optimizer", False):
             proposals = ExperimentProposer().propose_next(
                 task_node.task_id,
@@ -258,27 +274,38 @@ class MetaHarnessLoop:
             )
             artifact_payload = {
                 "task_id": task_node.task_id,
-                "summary": " ".join(summary_parts),
+                "summary": " ".join(summary_parts + [agent_result.get("summary", "")]).strip(),
                 "primary_metric": best.primary_metric,
                 "code_path": best.artifact_path,
                 "errors": [],
                 "artifact_dir": str(Path(best.artifact_path).parent),
                 "selected_experiment": best.to_dict(),
+                "agent_runtime": {
+                    "provider": agent_result.get("provider"),
+                    "model": agent_result.get("model"),
+                    "next_action": agent_result.get("next_action"),
+                },
             }
         else:
-            code_path = artifact_dir / "run.py"
-            code_path.write_text(
-                "def execute():\n"
-                f"    return {repr(active_task)}\n",
-                encoding="utf-8",
-            )
+            artifact_files = []
+            for artifact in agent_result.get("artifact_plan", []):
+                path = artifact_dir / artifact["path"]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(artifact.get("content", ""), encoding="utf-8")
+                artifact_files.append(str(path))
             artifact_payload = {
                 "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
-                "summary": " ".join(summary_parts + [f"Grounded on {', '.join(config.success_criteria or ['baseline criteria'])}."]),
+                "summary": " ".join(summary_parts + [agent_result.get("summary", "")]).strip(),
                 "primary_metric": 1.0 if failed_iterations == 0 else 0.85,
-                "code_path": str(code_path),
+                "code_path": artifact_files[0] if artifact_files else "",
                 "errors": [],
                 "artifact_dir": str(artifact_dir),
+                "generated_artifacts": artifact_files,
+                "agent_runtime": {
+                    "provider": agent_result.get("provider"),
+                    "model": agent_result.get("model"),
+                    "next_action": agent_result.get("next_action"),
+                },
             }
         if failed_iterations >= 5:
             ideation_result = ideation.run(active_task, failed_iterations)
@@ -288,6 +315,8 @@ class MetaHarnessLoop:
                 "instruction_used": run_n,
                 "task": active_task,
                 "failed_iterations": failed_iterations,
+                "provider": agent_result.get("provider"),
+                "model": agent_result.get("model"),
             },
             "result": artifact_payload,
         }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import shutil
 import time
 import uuid
@@ -23,32 +24,57 @@ class ExperimentRunner:
         sandbox_dir = self.sandbox_root / experiment_id
         sandbox_dir.mkdir(parents=True, exist_ok=True)
         started = time.time()
-        trajectory = config.get("trajectory") or self._derive_trajectory(config)
-        metric = float(config.get("primary_metric", trajectory[-1]))
-        payload = {
-            "task_id": task_id,
-            "config": config,
-            "trajectory": trajectory,
-            "primary_metric": metric,
-            "runtime_seconds": time.time() - started,
-        }
+        plan_path = sandbox_dir / "plan.json"
+        plan_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         artifact_path = sandbox_dir / "result.json"
-        ensure_parent(artifact_path)
-        artifact_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        (sandbox_dir / "artifact.py").write_text(
-            "def run_experiment():\n    return " + repr(metric) + "\n",
-            encoding="utf-8",
+        command = config.get("command") or self._default_command(plan_path, artifact_path)
+        process = subprocess.run(
+            command,
+            cwd=sandbox_dir,
+            capture_output=True,
+            text=True,
+            check=False,
         )
+        runtime_seconds = time.time() - started
+        if process.returncode != 0:
+            error_path = sandbox_dir / "stderr.log"
+            error_path.write_text(process.stderr, encoding="utf-8")
+            return ExperimentResult(
+                experiment_id=experiment_id,
+                task_id=task_id,
+                primary_metric=0.0,
+                secondary_metrics={"returncode": float(process.returncode)},
+                trajectory=[],
+                peak_memory=0.0,
+                runtime_seconds=runtime_seconds,
+                status="crash",
+                code_hash=hashlib.sha1(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest(),
+                artifact_path=str(error_path),
+                anomaly_score=float(config.get("anomaly_score", 1.0)),
+            )
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        trajectory = payload.get("trajectory", [])
+        metric = float(payload.get("primary_metric", trajectory[-1] if trajectory else 0.0))
+        payload.update(
+            {
+                "task_id": task_id,
+                "config": config,
+                "runtime_seconds": runtime_seconds,
+                "stdout": process.stdout,
+                "stderr": process.stderr,
+            }
+        )
+        artifact_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         code_hash = hashlib.sha1(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest()
         return ExperimentResult(
             experiment_id=experiment_id,
             task_id=task_id,
             primary_metric=metric,
-            secondary_metrics={"trajectory_end": trajectory[-1]},
+            secondary_metrics=payload.get("secondary_metrics", {"trajectory_end": trajectory[-1] if trajectory else 0.0}),
             trajectory=trajectory,
-            peak_memory=float(config.get("peak_memory", 0.0)),
-            runtime_seconds=time.time() - started,
-            status="keep" if metric >= float(config.get("keep_threshold", 0.0)) else "discard",
+            peak_memory=float(payload.get("peak_memory", 0.0)),
+            runtime_seconds=runtime_seconds,
+            status=payload.get("status", "keep" if metric >= float(config.get("keep_threshold", 0.0)) else "discard"),
             code_hash=code_hash,
             artifact_path=str(artifact_path),
             anomaly_score=float(config.get("anomaly_score", 0.0)),
@@ -57,8 +83,6 @@ class ExperimentRunner:
     def cleanup(self, sandbox_name: str) -> None:
         shutil.rmtree(self.sandbox_root / sandbox_name, ignore_errors=True)
 
-    def _derive_trajectory(self, config: dict[str, Any]) -> list[float]:
-        baseline = float(config.get("baseline_metric", 0.1))
-        step = float(config.get("step_gain", 0.1))
-        length = int(config.get("epochs", 4))
-        return [round(baseline + step * index, 4) for index in range(1, length + 1)]
+    def _default_command(self, plan_path: Path, artifact_path: Path) -> list[str]:
+        script_path = Path(__file__).resolve().parents[3] / "scripts" / "run_experiment.py"
+        return ["python3", str(script_path), "--plan", str(plan_path), "--output", str(artifact_path)]

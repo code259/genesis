@@ -2,10 +2,24 @@ import json
 
 from click.testing import CliRunner
 
+from genesis.agents.runtime import CodingAgentRuntime
 from genesis.cli.main import main
 
 
 def test_custom_benchmark_suite_runs_minimal_project(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        CodingAgentRuntime,
+        "generate_task",
+        lambda self, **kwargs: {
+            "summary": "Benchmark provider execution succeeded.",
+            "artifact_plan": [{"path": "notes.md", "content": "benchmark note"}],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+        },
+    )
     spec_path = tmp_path / "benchmark_spec.json"
     spec_path.write_text(
         json.dumps(
