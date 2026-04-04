@@ -43,7 +43,7 @@ class AdversarialOrchestrator:
 
         claim_flags = self.socratic.flag_implicit_assumptions(interrogations)
         literature_flags = [flag for result in literature_results if not result.verified for flag in result.evidence]
-        acceptance_hits = sum(1 for criterion in acceptance_criteria if criterion.lower() in text.lower())
+        acceptance_hits = sum(1 for criterion in acceptance_criteria if self._criterion_matches_text(criterion, text))
         acceptance_ratio = acceptance_hits / len(acceptance_criteria) if acceptance_criteria else 1.0
         report = AdversarialReport(
             claim_flags=claim_flags,
@@ -64,11 +64,30 @@ class AdversarialOrchestrator:
             for flag in report.literature_flags
             if flag in {"RESULT_CONTRADICTED_BY_LITERATURE", "ORACLE_FAIL"}
         ]
+        failed_formal_checks = [check.name for check in report.formal_checks if not check.passed]
         should_stop = (
             report.acceptance_ratio >= 0.9
             and not report.claim_flags
             and not critical_flags
+            and not failed_formal_checks
             and report.grounded_claims >= max(1, report.total_claims)
         )
         reasons = ["all stopping criteria satisfied"] if should_stop else ["continue iteration"]
-        return StoppingDecision(should_stop=should_stop, reasons=reasons, critical_flags=critical_flags)
+        reasons.extend(f"formal_check_failed:{name}" for name in failed_formal_checks)
+        return StoppingDecision(
+            should_stop=should_stop,
+            reasons=reasons,
+            critical_flags=critical_flags + failed_formal_checks,
+        )
+
+    def _criterion_matches_text(self, criterion: str, text: str) -> bool:
+        criterion_terms = {
+            token
+            for token in criterion.lower().split()
+            if len(token) > 3
+        }
+        text_terms = set(text.lower().split())
+        if not criterion_terms:
+            return True
+        matched = len(criterion_terms & text_terms)
+        return matched / len(criterion_terms) >= 0.6

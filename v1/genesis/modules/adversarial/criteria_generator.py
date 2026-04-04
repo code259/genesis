@@ -5,11 +5,21 @@ from genesis.config import ProjectConfig
 
 class AcceptanceCriteriaGenerator:
     def generate(self, config: ProjectConfig) -> dict[str, list[str]]:
-        criteria = config.success_criteria.copy()
+        criteria = [criterion.strip() for criterion in config.success_criteria if criterion.strip()]
         if not criteria:
             criteria = [
-                "Demonstrate progress against the research question.",
+                f"Address the research question: {config.research_question}",
                 "Provide at least one grounded empirical claim.",
                 "Produce artifacts that can be verified automatically.",
             ]
-        return {"criteria": criteria}
+        for oracle_hint in config.oracle_hints:
+            if oracle_hint.strip():
+                criteria.append(f"Honor oracle check: {oracle_hint.strip()}")
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for criterion in criteria:
+            normalized = criterion.lower()
+            if normalized not in seen:
+                deduped.append(criterion)
+                seen.add(normalized)
+        return {"criteria": deduped}

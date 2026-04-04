@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from genesis.config import ProjectConfig
@@ -53,9 +54,11 @@ def test_citations_plotting_and_verification(tmp_path):
     (output_dir / "result.json").write_text("{}", encoding="utf-8")
     report = verification.run(output_dir, "project-demo")
     assert report["checks"]
+    assert isinstance(report["passed"], bool)
 
 
 def test_paper_synthesizer_and_domain_registry(tmp_path):
+    os.chdir(tmp_path)
     project_root = tmp_path / "projects"
     paper_dir = project_root / "demo" / "outputs" / "paper"
     paper_dir.mkdir(parents=True)
