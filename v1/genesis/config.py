@@ -54,10 +54,20 @@ def load_project_config(path: Union[str, Path]) -> ProjectConfig:
 
 def load_api_config() -> dict[str, Any]:
     semantic_scholar_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
-    groq_keys = [value for key, value in sorted(os.environ.items()) if key.startswith("GROQ_API_KEY")]
-    ollama_keys = [value for key, value in sorted(os.environ.items()) if key.startswith("OLLAMA_API_KEY")]
+    groq_keys = [
+        value
+        for key, value in sorted(os.environ.items())
+        if key.startswith("GROQ_API_KEY") and value
+    ]
+    ollama_keys = [
+        value
+        for key, value in sorted(os.environ.items())
+        if key.startswith("OLLAMA_API_KEY") and value
+    ]
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     return {
         "semantic_scholar_api_key": semantic_scholar_key,
         "groq_api_keys": groq_keys,
         "ollama_api_keys": ollama_keys,
+        "ollama_base_url": ollama_base_url,
     }

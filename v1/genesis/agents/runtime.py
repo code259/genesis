@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 import requests
 
+from genesis.config import load_api_config
+
 
 @dataclass
 class CategoryConfig:
@@ -20,7 +22,10 @@ class CategoryConfig:
 
 
 class ProviderRuntimeError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, error_class: str = "provider_error", retryable: bool = True):
+        super().__init__(message)
+        self.error_class = error_class
+        self.retryable = retryable
 
 
 class CodingAgentRuntime:
@@ -34,6 +39,7 @@ class CodingAgentRuntime:
         self.config_path = Path(config_path)
         self.session = session or requests.Session()
         self.timeout = timeout
+        self.api_config = load_api_config()
         self.categories = self._load_categories()
 
     def generate_task(
@@ -47,6 +53,7 @@ class CodingAgentRuntime:
         category_config = self.categories[category]
         prompt = self._build_prompt(instruction, context, budget or {}, category)
         errors: list[str] = []
+        last_error = ProviderRuntimeError("no provider attempts executed")
         for model in [category_config.model] + list(category_config.fallbacks):
             try:
                 if category_config.provider == "ollama":
@@ -59,10 +66,21 @@ class CodingAgentRuntime:
                 payload["provider"] = category_config.provider
                 payload["model"] = model
                 payload["raw_response"] = content
+                payload["retryable"] = False
+                payload["error_class"] = None
                 return payload
-            except Exception as exc:  # noqa: BLE001
+            except ProviderRuntimeError as exc:
                 errors.append(f"{model}: {exc}")
-        raise ProviderRuntimeError("; ".join(errors))
+                last_error = exc
+            except Exception as exc:  # noqa: BLE001
+                generic = ProviderRuntimeError(str(exc), error_class="unexpected_runtime_error", retryable=False)
+                errors.append(f"{model}: {generic}")
+                last_error = generic
+        raise ProviderRuntimeError(
+            "; ".join(errors),
+            error_class=last_error.error_class if errors else "provider_error",
+            retryable=last_error.retryable if errors else True,
+        )
 
     def _load_categories(self) -> dict[str, CategoryConfig]:
         raw = self.config_path.read_text(encoding="utf-8")
@@ -96,48 +114,73 @@ class CodingAgentRuntime:
         )
 
     def _invoke_ollama(self, model: str, prompt: str, category: CategoryConfig) -> str:
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-        response = self.session.post(
-            f"{base_url.rstrip('/')}/api/chat",
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "options": {"temperature": category.temperature, "num_predict": category.max_tokens},
-            },
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        return payload.get("message", {}).get("content", "")
+        base_url = self.api_config["ollama_base_url"]
+        try:
+            response = self.session.post(
+                f"{base_url.rstrip('/')}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "options": {"temperature": category.temperature, "num_predict": category.max_tokens},
+                },
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            return payload.get("message", {}).get("content", "")
+        except requests.RequestException as exc:
+            raise ProviderRuntimeError(
+                str(exc),
+                error_class="ollama_connection_error",
+                retryable=True,
+            ) from exc
 
     def _invoke_groq(self, model: str, prompt: str, category: CategoryConfig) -> str:
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key:
-            raise ProviderRuntimeError("GROQ_API_KEY is not configured")
-        response = self.session.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": model,
-                "temperature": category.temperature,
-                "max_tokens": category.max_tokens,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-            },
-            timeout=self.timeout,
+        keys = self.api_config["groq_api_keys"]
+        if not keys:
+            raise ProviderRuntimeError(
+                "GROQ_API_KEY is not configured",
+                error_class="groq_credentials_missing",
+                retryable=False,
+            )
+        errors: list[str] = []
+        for api_key in keys:
+            try:
+                response = self.session.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={
+                        "model": model,
+                        "temperature": category.temperature,
+                        "max_tokens": category.max_tokens,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "response_format": {"type": "json_object"},
+                    },
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["choices"][0]["message"]["content"]
+            except requests.RequestException as exc:
+                errors.append(str(exc))
+        raise ProviderRuntimeError(
+            "; ".join(errors),
+            error_class="groq_request_failed",
+            retryable=True,
         )
-        response.raise_for_status()
-        payload = response.json()
-        return payload["choices"][0]["message"]["content"]
 
     def _parse_payload(self, content: str) -> dict[str, Any]:
         if not content:
-            raise ProviderRuntimeError("empty model response")
+            raise ProviderRuntimeError("empty model response", error_class="empty_response", retryable=True)
         try:
             return json.loads(content)
         except json.JSONDecodeError:
             match = re.search(r"\{.*\}", content, re.DOTALL)
             if match:
                 return json.loads(match.group(0))
-        raise ProviderRuntimeError("model response did not contain valid JSON")
+        raise ProviderRuntimeError(
+            "model response did not contain valid JSON",
+            error_class="invalid_json_response",
+            retryable=True,
+        )
