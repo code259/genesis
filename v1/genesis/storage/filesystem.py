@@ -18,6 +18,7 @@ class ProjectFilesystem:
         (project_dir / "runs").mkdir(parents=True, exist_ok=True)
         (project_dir / "knowledge").mkdir(exist_ok=True)
         (project_dir / "outputs" / "paper").mkdir(parents=True, exist_ok=True)
+        (project_dir / "outputs" / "paper" / "figures").mkdir(parents=True, exist_ok=True)
         (project_dir / "outputs" / "code").mkdir(parents=True, exist_ok=True)
         (project_dir / "experiments" / "trajectories").mkdir(parents=True, exist_ok=True)
         (project_dir / "runtime" / "sandboxes").mkdir(parents=True, exist_ok=True)
@@ -42,7 +43,10 @@ class ProjectFilesystem:
     def write_instruction(self, project_id: str, run_n: int, content: str) -> Path:
         destination = self.get_run_dir(project_id, run_n) / "instruction.md"
         ensure_parent(destination)
-        destination.write_text(content, encoding="utf-8")
+        with tempfile.NamedTemporaryFile("w", delete=False, dir=str(destination.parent), encoding="utf-8") as handle:
+            handle.write(content)
+            temp_name = handle.name
+        os.replace(temp_name, destination)
         return destination
 
     def write_json(self, path: Union[str, Path], payload: Union[dict[str, Any], List[Any]]) -> Path:
@@ -63,7 +67,10 @@ class ProjectFilesystem:
     def list_all_results(self, project_id: str) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         for result_path in sorted((self.base_dir / project_id / "runs").glob("*/result.json")):
-            results.append(self.read_json(result_path))
+            try:
+                results.append(self.read_json(result_path))
+            except json.JSONDecodeError:
+                continue
         return sorted(results, key=lambda item: item.get("primary_metric", 0.0), reverse=True)
 
     def validate_project(self, project_id: str) -> bool:
@@ -75,6 +82,7 @@ class ProjectFilesystem:
             project_dir / "outputs" / "paper",
             project_dir / "outputs" / "code",
             project_dir / "experiments" / "trajectories",
+            project_dir / "runtime" / "sandboxes",
             project_dir / "causal_dag.json",
         ]
         return all(path.exists() for path in required)

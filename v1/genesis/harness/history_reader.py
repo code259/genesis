@@ -18,7 +18,12 @@ class SelectiveHistoryReader:
         for trace_path in sorted(self.filesystem.get_project_dir(project_id).glob("runs/*/trace.json")):
             text = Path(trace_path).read_text(encoding="utf-8")
             if compiled.search(text):
-                matches.append(text)
+                matches.append(
+                    self.token_budget.trim_to_budget(
+                        text,
+                        layer_budget=600,
+                    )
+                )
             if len(matches) >= max_results:
                 break
         return matches
@@ -31,10 +36,13 @@ class SelectiveHistoryReader:
         for result_path in sorted(self.filesystem.get_project_dir(project_id).glob("runs/*/result.json"), reverse=True):
             payload = self.filesystem.read_json(result_path)
             if payload.get("errors"):
-                errors.extend(payload["errors"])
+                errors.extend(str(error) for error in payload["errors"])
             if len(errors) >= n:
                 break
-        return errors[:n]
+        return [
+            self.token_budget.trim_to_budget(error, layer_budget=200)
+            for error in errors[:n]
+        ]
 
     def get_adversarial_summary(self, project_id: str, run_n: int) -> dict[str, Any]:
         report_path = self.filesystem.get_run_dir(project_id, run_n) / "adversarial_report.json"
@@ -44,6 +52,13 @@ class SelectiveHistoryReader:
 
     def summarize_experiment_history(self, project_id: str) -> str:
         results = self.get_top_k_results(project_id, k=5)
-        lines = [f"- {result.get('task_id', 'unknown')}: {result.get('primary_metric', 0)}" for result in results]
-        return "\n".join(lines)
-
+        lines = []
+        for result in results:
+            task_id = result.get("task_id", "unknown")
+            metric = result.get("primary_metric", 0)
+            summary = str(result.get("summary", "")).strip()
+            line = f"- {task_id}: metric={metric}"
+            if summary:
+                line += f" | {summary}"
+            lines.append(line)
+        return self.token_budget.trim_to_budget("\n".join(lines), layer_budget=1200)
