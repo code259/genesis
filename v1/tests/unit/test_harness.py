@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from genesis.config import ProjectConfig
 from genesis.harness.decomposer import TaskDecomposer
 from genesis.harness.instruction_composer import InstructionComposer
@@ -106,3 +108,74 @@ def test_harness_requested_modules_expand_on_escalation(tmp_path):
     assert "ideation" in modules
     assert "oracle" in modules
     assert "domain_knowledge" in modules
+
+
+def test_default_executor_runs_generic_command_plan(tmp_path, monkeypatch):
+    loop = MetaHarnessLoop(
+        projects_root=tmp_path / "projects",
+        taste_root=tmp_path / "taste_db",
+    )
+    project_dir = loop.filesystem.init_project(
+        "demo",
+        {
+            "research_question": "Generate and run a script",
+            "domain": "general",
+            "compute_budget": "local_cpu",
+            "time_budget_hours": 1,
+            "domain_knowledge_model": "none",
+            "output_dir": str(tmp_path / "projects"),
+            "success_criteria": ["Generate and run a script"],
+            "oracle_hints": [],
+        },
+    )
+    monkeypatch.setattr(
+        loop.agent_runtime,
+        "generate_task",
+        lambda **kwargs: {
+            "summary": "Created and executed a script.",
+            "artifact_plan": [
+                {
+                    "path": "writer.py",
+                    "content": "from pathlib import Path\nPath('output.txt').write_text('done', encoding='utf-8')\nprint('ok')\n",
+                }
+            ],
+            "command_plan": ["python3 writer.py"],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+        },
+    )
+    result = loop._default_executor(
+        project_dir=project_dir,
+        run_n=1,
+        config=ProjectConfig(
+            research_question="Generate and run a script",
+            domain="general",
+            compute_budget="local_cpu",
+            time_budget_hours=1,
+            domain_knowledge_model="none",
+            output_dir=str(tmp_path / "projects"),
+            success_criteria=["Generate and run a script"],
+            oracle_hints=[],
+        ),
+        task_node=TaskNode(
+            task_id="task",
+            description="Generate and run a script",
+            acceptance_criteria=[],
+            oracle_checks=[],
+            estimated_compute_budget="local_cpu",
+            requires_ml_optimizer=False,
+        ),
+        optimizer=None,
+        ledger=None,
+        ideation=None,
+        oracle_resolver=None,
+        failed_iterations=0,
+        taste_model=None,
+    )
+    payload = result["result"]
+    assert payload["executed_commands"] == ["python3 writer.py"]
+    assert any(path.endswith("output.txt") for path in payload["generated_artifacts"])
+    assert Path(payload["artifact_dir"], "result.json").exists()

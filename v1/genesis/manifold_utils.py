@@ -27,7 +27,7 @@ def build_citation_adjacency(papers: list[dict[str, Any]]) -> tuple[np.ndarray, 
     adjacency = np.eye(len(papers), dtype=float)
     for idx, paper in enumerate(papers):
         for citation in paper.get("citations", []):
-            target_id = citation.get("paper_id")
+            target_id = _citation_target_id(citation)
             if target_id in paper_index:
                 adjacency[idx, paper_index[target_id]] = 1.0
                 adjacency[paper_index[target_id], idx] = 1.0
@@ -108,10 +108,22 @@ def build_citation_graph(papers: list[dict[str, Any]]) -> nx.Graph:
         graph.add_node(paper["paper_id"], paper=paper)
     for paper in papers:
         for citation in paper.get("citations", []):
-            target_id = citation.get("paper_id")
+            target_id = _citation_target_id(citation)
             if target_id in graph:
                 graph.add_edge(paper["paper_id"], target_id)
     return graph
+
+
+def _citation_target_id(citation: Any) -> str | None:
+    if isinstance(citation, str):
+        cleaned = citation.strip()
+        return cleaned or None
+    if isinstance(citation, dict):
+        target = citation.get("paper_id")
+        if isinstance(target, str):
+            cleaned = target.strip()
+            return cleaned or None
+    return None
 
 
 def cosine_distance(left: list[float], right: list[float]) -> float:

@@ -29,6 +29,7 @@ class VerificationPipeline:
         if results_file.exists():
             result_payload = self._load_result(results_file)
             report["checks"].append({"name": "artifact_exists", "passed": True})
+            report["checks"].append(self._substantive_artifact_check(result_payload))
             report["checks"].append(
                 self.formal.check_implementation_drift(results_file.read_text(encoding="utf-8"), results_file).to_dict()
             )
@@ -70,6 +71,27 @@ class VerificationPipeline:
             "name": "metric_consistency",
             "passed": passed,
             "evidence": [f"primary_metric={primary_metric}", f"selected_metric={selected_metric}"],
+        }
+
+    def _substantive_artifact_check(self, payload: dict[str, Any]) -> dict[str, Any]:
+        generated_artifacts = payload.get("generated_artifacts", [])
+        executed_commands = payload.get("executed_commands", [])
+        selected_experiment = payload.get("selected_experiment")
+        code_path = str(payload.get("code_path", "")).strip()
+        has_generated_artifacts = isinstance(generated_artifacts, list) and bool(generated_artifacts)
+        has_executed_commands = isinstance(executed_commands, list) and bool(executed_commands)
+        has_selected_experiment = isinstance(selected_experiment, dict) and bool(selected_experiment)
+        has_code_path = bool(code_path)
+        passed = has_generated_artifacts or has_executed_commands or has_selected_experiment or has_code_path
+        return {
+            "name": "substantive_artifacts",
+            "passed": passed,
+            "evidence": [
+                f"generated_artifacts={len(generated_artifacts) if isinstance(generated_artifacts, list) else 0}",
+                f"executed_commands={len(executed_commands) if isinstance(executed_commands, list) else 0}",
+                f"has_selected_experiment={has_selected_experiment}",
+                f"has_code_path={has_code_path}",
+            ],
         }
 
     def _citation_check(self, outputs_dir: Path) -> list[dict[str, Any]]:

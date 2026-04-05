@@ -32,6 +32,7 @@ class CodingAgentRuntime:
     DEFAULT_RESPONSE_SCHEMA = {
         "summary": "",
         "artifact_plan": [],
+        "command_plan": [],
         "experiment_plan": [],
         "citations": [],
         "next_action": "continue",
@@ -123,6 +124,7 @@ class CodingAgentRuntime:
             "genesis-ideation": [
                 "summary",
                 "artifact_plan",
+                "command_plan",
                 "experiment_plan",
                 "citations",
                 "next_action",
@@ -131,6 +133,7 @@ class CodingAgentRuntime:
             "genesis-oracle": [
                 "summary",
                 "artifact_plan",
+                "command_plan",
                 "experiment_plan",
                 "citations",
                 "next_action",
@@ -139,6 +142,7 @@ class CodingAgentRuntime:
             "genesis-paper": [
                 "summary",
                 "artifact_plan",
+                "command_plan",
                 "experiment_plan",
                 "citations",
                 "next_action",
@@ -146,7 +150,7 @@ class CodingAgentRuntime:
             ],
         }.get(
             category,
-            ["summary", "artifact_plan", "experiment_plan", "citations", "next_action"],
+            ["summary", "artifact_plan", "command_plan", "experiment_plan", "citations", "next_action"],
         )
         return (
             "You are the Genesis coding agent runtime.\n"
@@ -239,7 +243,7 @@ class CodingAgentRuntime:
             normalized["paper_body"] = ""
         normalized.update(payload)
 
-        for list_key in ("artifact_plan", "experiment_plan", "citations", "task_tree", "oracle_rules"):
+        for list_key in ("artifact_plan", "command_plan", "experiment_plan", "citations", "task_tree", "oracle_rules"):
             if list_key in normalized and not isinstance(normalized[list_key], list):
                 normalized[list_key] = []
         for string_key in ("summary", "next_action", "paper_body"):

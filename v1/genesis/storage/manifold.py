@@ -15,6 +15,9 @@ try:
 except Exception:  # pragma: no cover - optional backend
     chromadb = None
 
+
+_STRUCTURED_METADATA_PREFIX = "__genesis_json__:"
+
 def _cosine_distance(left: list[float], right: list[float]) -> float:
     if not left or not right:
         return 1.0
@@ -74,7 +77,7 @@ class ManifoldIndex:
             for item_id, metadata, distance, embedding in zip(ids, metadatas, distances, embeddings):
                 if item_id in exclude_ids:
                     continue
-                item = dict(metadata or {})
+                item = self._decode_metadata(metadata or {})
                 item["distance"] = float(distance)
                 item["embedding"] = list(embedding or [])
                 if distance_threshold is None or item["distance"] <= distance_threshold:
@@ -103,7 +106,7 @@ class ManifoldIndex:
                 collection_obj = self._collection_for(collection_name)
                 result = collection_obj.get(ids=[point_id], include=["metadatas"])
                 if result.get("ids"):
-                    metadata = result.get("metadatas", [{}])[0] or {}
+                    metadata = self._decode_metadata(result.get("metadatas", [{}])[0] or {})
                     return float(metadata.get("density_score", 0.0))
         for collection in ("papers", "experiments"):
             for item in self._load(self._path_for_collection(collection)):
@@ -169,7 +172,7 @@ class ManifoldIndex:
                 normalized = self._normalize_item(item, collection=collection)
                 ids.append(self._item_id(normalized, collection=collection))
                 embeddings.append(normalized.get("embedding") or normalized.get("latent_z") or [])
-                metadatas.append({k: v for k, v in normalized.items() if k not in {"embedding", "latent_z"}})
+                metadatas.append(self._encode_metadata({k: v for k, v in normalized.items() if k not in {"embedding", "latent_z"}}))
             if ids:
                 collection_obj.upsert(ids=ids, metadatas=metadatas, embeddings=embeddings)
             return
@@ -236,7 +239,7 @@ class ManifoldIndex:
             result.get("metadatas", []),
             result.get("embeddings", []),
         ):
-            payload = dict(metadata or {})
+            payload = self._decode_metadata(metadata or {})
             key = "paper_id" if collection == "papers" else "experiment_id"
             payload[key] = item_id
             payload["embedding"] = list(embedding or [])
@@ -262,6 +265,27 @@ class ManifoldIndex:
         if "embedding" in normalized and isinstance(normalized["embedding"], list):
             normalized["embedding"] = [float(value) for value in normalized["embedding"]]
         return normalized
+
+    def _encode_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        encoded: dict[str, Any] = {}
+        for key, value in metadata.items():
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                encoded[key] = value
+                continue
+            encoded[key] = f"{_STRUCTURED_METADATA_PREFIX}{json.dumps(value, separators=(',', ':'))}"
+        return encoded
+
+    def _decode_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        decoded: dict[str, Any] = {}
+        for key, value in metadata.items():
+            if isinstance(value, str) and value.startswith(_STRUCTURED_METADATA_PREFIX):
+                try:
+                    decoded[key] = json.loads(value[len(_STRUCTURED_METADATA_PREFIX):])
+                    continue
+                except json.JSONDecodeError:
+                    pass
+            decoded[key] = value
+        return decoded
 
     def _load(self, path: Path) -> list[dict[str, Any]]:
         try:

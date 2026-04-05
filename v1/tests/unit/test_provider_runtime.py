@@ -113,6 +113,7 @@ def test_provider_runtime_normalizes_missing_response_fields(tmp_path):
     runtime = CodingAgentRuntime(config_path, session=_MinimalSession())
     payload = runtime.generate_task(category="sisyphus", instruction="do work", context={"task": "x"})
     assert payload["artifact_plan"] == []
+    assert payload["command_plan"] == []
     assert payload["experiment_plan"] == []
     assert payload["citations"] == []
     assert payload["next_action"] == "continue"
@@ -147,3 +148,9 @@ def test_provider_runtime_accepts_legacy_providers_key(tmp_path):
     assert runtime.categories["sisyphus"].model == "gemma4"
     assert runtime.categories["sisyphus"].temperature == 0.2
     assert runtime.categories["sisyphus"].max_tokens == 1024
+
+
+def test_live_runtime_config_uses_gemma4():
+    config_path = "/Users/nikhilmaturi/Files/Projects/genesis/v1/.opencode/oh-my-openagent.jsonc"
+    runtime = CodingAgentRuntime(config_path, session=_Session())
+    assert runtime.categories["sisyphus"].model == "gemma4"

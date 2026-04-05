@@ -68,3 +68,17 @@ def test_custom_benchmark_suite_builds_manifold_and_scores_ideas(tmp_path, monke
     ideas = orchestrator.run("optimizer warmup surprise", n_failed_iterations=5)
     assert ideas
     assert ideas[0].score.composite_score >= 0.3
+
+
+def test_build_citation_adjacency_accepts_string_citation_ids():
+    from genesis.manifold_utils import build_citation_adjacency
+
+    adjacency, index = build_citation_adjacency(
+        [
+            {"paper_id": "paper-1", "citations": ["paper-2"]},
+            {"paper_id": "paper-2", "citations": []},
+        ]
+    )
+    assert index == {"paper-1": 0, "paper-2": 1}
+    assert adjacency[0, 1] == 1.0
+    assert adjacency[1, 0] == 1.0

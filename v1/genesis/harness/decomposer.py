@@ -55,7 +55,7 @@ class TaskDecomposer:
             suffix="experiments",
             dependencies=[literature.task_id],
             success_metric=config.success_criteria[0] if config.success_criteria else "improve primary metric",
-            requires_ml_optimizer=config.domain in {"ml_efficiency", "astrophysics"} or bool(config.success_criteria),
+            requires_ml_optimizer=config.domain == "ml_efficiency",
         )
         verification = self._task(
             config,

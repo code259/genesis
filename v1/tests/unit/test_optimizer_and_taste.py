@@ -168,3 +168,26 @@ def test_oracle_resolver_and_ideation_orchestrator(tmp_path):
     spec = OracleResolver().resolve_oracle(task, config)
     assert spec.metric_name == "loss"
     assert spec.direction == "minimize"
+
+
+def test_manifold_chromadb_round_trips_structured_metadata(tmp_path):
+    manifold = ManifoldIndex(tmp_path / "manifold")
+    manifold.upsert_collection(
+        [
+            {
+                "paper_id": "paper-1",
+                "title": "Warmup schedules improve convergence",
+                "abstract": "Warmup stabilizes early optimization.",
+                "latent_z": [1.0, 0.0, 0.0],
+                "embedding": [1.0, 0.0, 0.0],
+                "density_score": 0.2,
+                "authors": [{"name": "A. Researcher"}],
+                "citations": ["paper-2"],
+                "domain": "ml_efficiency",
+            }
+        ],
+        collection="papers",
+    )
+    papers = manifold.all_papers()
+    assert papers[0]["authors"] == [{"name": "A. Researcher"}]
+    assert papers[0]["citations"] == ["paper-2"]

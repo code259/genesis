@@ -16,7 +16,14 @@ class PaperSynthesizer:
         self.project_root = Path(project_root)
         self.runtime = runtime
 
-    def synthesize(self, project_id: str) -> dict[str, str]:
+    def synthesize(
+        self,
+        project_id: str,
+        *,
+        final: bool = True,
+        completion_reason: str = "",
+        project_status: str = "complete",
+    ) -> dict[str, str]:
         project_dir = self.project_root / project_id
         paper_dir = project_dir / "outputs" / "paper"
         paper_dir.mkdir(parents=True, exist_ok=True)
@@ -26,7 +33,12 @@ class PaperSynthesizer:
         report_path = paper_dir / "synthesis_report.json"
         citations = CitationsAgent(project_dir / "knowledge" / "citations_cache.json")
 
-        sections = self._collect_sections(project_dir)
+        sections = self._collect_sections(
+            project_dir,
+            final=final,
+            completion_reason=completion_reason,
+            project_status=project_status,
+        )
         reference_metadata = self._collect_reference_metadata(project_dir, sections["runs"], citations)
         references_path.write_text("".join(citations.format_bibtex(metadata) for metadata in reference_metadata), encoding="utf-8")
         run_index_path.write_text(json.dumps(sections["run_index"], indent=2), encoding="utf-8")
@@ -61,6 +73,9 @@ class PaperSynthesizer:
 
         report = {
             "project_id": project_id,
+            "report_mode": "final" if final else "interim",
+            "project_status": project_status,
+            "completion_reason": completion_reason,
             "compile_backend": compile_backend,
             "verified_run_count": sections["verified_run_count"],
             "total_run_count": sections["total_run_count"],
@@ -73,7 +88,14 @@ class PaperSynthesizer:
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         return {"pdf_path": str(pdf_path), "latex_path": str(tex_path)}
 
-    def _collect_sections(self, project_dir: Path) -> dict[str, Any]:
+    def _collect_sections(
+        self,
+        project_dir: Path,
+        *,
+        final: bool,
+        completion_reason: str,
+        project_status: str,
+    ) -> dict[str, Any]:
         runs = []
         for run_dir in sorted((project_dir / "runs").glob("*")):
             result_path = run_dir / "result.json"
@@ -101,28 +123,45 @@ class PaperSynthesizer:
             }
 
         verified_runs = [run for run in runs if run["verification"].get("passed")]
-        source_runs = verified_runs or runs
-        top_metric = max(run["result"].get("primary_metric", 0.0) for run in source_runs)
-        abstract = (
-            f"Genesis completed {len(runs)} research iterations, with {len(verified_runs)} verification-passing runs. "
-            f"The best observed primary metric was {top_metric:.4f}."
-        )
-        introduction = "This report summarizes the current Genesis v1 project state and emphasizes verification-passing artifacts."
+        if not final:
+            source_runs = verified_runs
+        else:
+            source_runs = verified_runs or runs
+        top_metric = max((run["result"].get("primary_metric", 0.0) for run in source_runs), default=0.0)
+        if final:
+            abstract = (
+                f"Genesis completed {len(runs)} research iterations, with {len(verified_runs)} verification-passing runs. "
+                f"The best observed primary metric was {top_metric:.4f}."
+            )
+            introduction = "This report summarizes the current Genesis v1 project state and emphasizes verification-passing artifacts."
+        else:
+            abstract = (
+                f"Interim Genesis report: {project_status}. "
+                f"{len(verified_runs)} of {len(runs)} runs passed verification. "
+                f"Current completion reason: {completion_reason or 'work remains.'}"
+            )
+            introduction = "This is an interim project report generated because the run ended before stopping criteria were satisfied."
         methods = "\n".join(
             f"Run {index}: task={run['result'].get('task_id', 'unknown')}, provider={run['result'].get('agent_runtime', {}).get('provider', 'n/a')}, model={run['result'].get('agent_runtime', {}).get('model', 'n/a')}."
             for index, run in enumerate(source_runs, start=1)
-        )
+        ) or "No verified substantive runs were available for this report."
         results_text = "\n\n".join(
             f"\\textbf{{Run {index}}}: {run['result'].get('summary', 'n/a')} Primary metric={run['result'].get('primary_metric', 0.0)}. Verification passed={run['verification'].get('passed', False)}."
             for index, run in enumerate(source_runs, start=1)
-        )
-        discussion = (
-            "No runs passed verification; follow-up work should prioritize fixing verification failures."
-            if not verified_runs
-            else f"{len(verified_runs)} of {len(runs)} runs passed verification. Future work should expand the verified result set."
-        )
+        ) or "No verified substantive results were available at synthesis time."
+        if not final:
+            discussion = (
+                f"The project did not reach stopping criteria. Completion reason: {completion_reason or 'incomplete'}. "
+                "This report is for progress inspection only and should not be treated as a final paper."
+            )
+        else:
+            discussion = (
+                "No runs passed verification; follow-up work should prioritize fixing verification failures."
+                if not verified_runs
+                else f"{len(verified_runs)} of {len(runs)} runs passed verification. Future work should expand the verified result set."
+            )
 
-        if self.runtime is not None:
+        if self.runtime is not None and source_runs:
             try:
                 payload = self.runtime.generate_task(
                     category="genesis-paper",

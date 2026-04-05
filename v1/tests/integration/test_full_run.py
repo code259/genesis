@@ -8,6 +8,23 @@ from genesis.cli.main import main
 from genesis.models import StoppingDecision
 
 
+class _PassingReport:
+    def __init__(self):
+        self.acceptance_ratio = 1.0
+        self.stopping_decision = StoppingDecision(True, ["all stopping criteria satisfied"])
+
+    def to_dict(self):
+        return {
+            "acceptance_ratio": self.acceptance_ratio,
+            "claim_flags": [],
+            "literature_flags": [],
+            "formal_checks": [],
+            "grounded_claims": 1,
+            "total_claims": 1,
+            "stopping_decision": self.stopping_decision.to_dict(),
+        }
+
+
 def test_full_run(tmp_path, monkeypatch):
     monkeypatch.setattr(
         CodingAgentRuntime,
@@ -15,6 +32,7 @@ def test_full_run(tmp_path, monkeypatch):
         lambda self, **kwargs: {
             "summary": "Provider executed task successfully.",
             "artifact_plan": [{"path": "notes.md", "content": "generated note"}],
+            "command_plan": [],
             "experiment_plan": [
                 {
                     "description": "agent proposed experiment",
@@ -29,6 +47,8 @@ def test_full_run(tmp_path, monkeypatch):
             "model": "fake-model",
         },
     )
+    monkeypatch.setattr("genesis.harness.loop.MetaHarnessLoop._run_adversarial_check", lambda self, outputs, criteria: _PassingReport())
+    monkeypatch.setattr("genesis.modules.verification.pipeline.VerificationPipeline.run", lambda self, outputs_dir, project_id, oracle_path=None: {"passed": True, "checks": []})
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(
         json.dumps(
@@ -63,6 +83,7 @@ def test_init_and_status_commands(tmp_path, monkeypatch):
         lambda self, **kwargs: {
             "summary": "Provider executed task successfully.",
             "artifact_plan": [{"path": "notes.md", "content": "generated note"}],
+            "command_plan": [],
             "experiment_plan": [],
             "citations": [],
             "next_action": "continue",
@@ -130,6 +151,7 @@ def test_adversarial_stalemate_halts_after_escalation_window(tmp_path, monkeypat
         lambda self, **kwargs: {
             "summary": "Provider executed task unsuccessfully.",
             "artifact_plan": [{"path": "notes.md", "content": "generated note"}],
+            "command_plan": [],
             "experiment_plan": [],
             "citations": [],
             "next_action": "continue",
@@ -180,3 +202,65 @@ def test_adversarial_stalemate_halts_after_escalation_window(tmp_path, monkeypat
     assert '"status": "halted"' in result.output
     assert (tmp_path / "projects" / "stalemate01" / "HALT.json").exists()
     assert (tmp_path / "projects" / "stalemate01" / "runs" / "3" / "escalation_report.json").exists()
+
+
+def test_max_runs_exhaustion_returns_incomplete_and_interim_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        CodingAgentRuntime,
+        "generate_task",
+        lambda self, **kwargs: {
+            "summary": "Provider executed task but work remains.",
+            "artifact_plan": [{"path": "notes.md", "content": "generated note"}],
+            "command_plan": [],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+        },
+    )
+
+    class _Report:
+        def __init__(self):
+            self.acceptance_ratio = 0.0
+            self.stopping_decision = StoppingDecision(False, ["continue iteration"])
+
+        def to_dict(self):
+            return {
+                "acceptance_ratio": self.acceptance_ratio,
+                "claim_flags": ["IMPLICIT_ASSUMPTION:test"],
+                "literature_flags": [],
+                "formal_checks": [],
+                "grounded_claims": 0,
+                "total_claims": 1,
+                "stopping_decision": self.stopping_decision.to_dict(),
+            }
+
+    monkeypatch.setattr("genesis.harness.loop.MetaHarnessLoop._run_adversarial_check", lambda self, outputs, criteria: _Report())
+    monkeypatch.setattr("genesis.modules.verification.pipeline.VerificationPipeline.run", lambda self, outputs_dir, project_id, oracle_path=None: {"passed": False, "checks": []})
+
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(
+        json.dumps(
+            {
+                "research_question": "Force incomplete project",
+                "domain": "general",
+                "success_criteria": ["Force incomplete project"],
+                "oracle_hints": [],
+                "compute_budget": "local_cpu",
+                "time_budget_hours": 1,
+                "domain_knowledge_model": "none",
+                "output_dir": str(tmp_path / "projects"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(main, ["run", "--project-id", "incomplete01", "--spec", str(spec_path), "--max-runs", "2"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "incomplete"
+    assert "max runs exhausted" in payload["summary"]
+    report = json.loads((tmp_path / "projects" / "incomplete01" / "outputs" / "paper" / "synthesis_report.json").read_text(encoding="utf-8"))
+    assert report["report_mode"] == "interim"

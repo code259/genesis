@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import shlex
+import subprocess
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -93,6 +96,8 @@ class MetaHarnessLoop:
         taste_model = self.taste_persistence.load_for_project(project_id, project_dir / "knowledge" / "taste_snapshot.json")
         failed_iterations = 0
         redirect_message = ""
+        run_n = 0
+        stopping_criteria_satisfied = False
 
         result_summary = "unfinished"
         for run_n in range(1, max_runs + 1):
@@ -191,14 +196,21 @@ class MetaHarnessLoop:
             )
             if self._check_stopping_criteria(report) and verification["passed"]:
                 result_summary = "stopping criteria satisfied"
+                stopping_criteria_satisfied = True
                 failed_iterations = 0
                 redirect_message = ""
                 self.filesystem.write_project_state(
                     project_id,
                     {
-                        "status": "complete",
-                        "run_count": run_n,
-                        "last_run_status": report.stopping_decision.to_dict(),
+                            "status": "complete",
+                            "run_count": run_n,
+                            "last_run_status": self._build_run_status(
+                                run_n=run_n,
+                                summary=result_summary,
+                                stopping_decision=report.stopping_decision.to_dict(),
+                                verification=verification,
+                                result=execution["result"],
+                            ),
                     },
                 )
                 break
@@ -210,7 +222,13 @@ class MetaHarnessLoop:
                     "status": "running",
                     "run_count": run_n,
                     "escalation_attempts": escalation_attempts,
-                    "last_run_status": report.stopping_decision.to_dict(),
+                    "last_run_status": self._build_run_status(
+                        run_n=run_n,
+                        summary="continue iteration",
+                        stopping_decision=report.stopping_decision.to_dict(),
+                        verification=verification,
+                        result=execution["result"],
+                    ),
                 },
             )
             if failed_iterations >= self.ADVERSARIAL_ITERATION_LIMIT:
@@ -253,7 +271,10 @@ class MetaHarnessLoop:
                 {
                     "status": "halted",
                     "run_count": run_n,
-                    "last_run_status": result_summary,
+                    "last_run_status": {
+                        "run_n": run_n,
+                        "summary": result_summary,
+                    },
                 },
             )
             return ProjectResult(
@@ -263,22 +284,34 @@ class MetaHarnessLoop:
                 run_count=run_n,
                 summary=result_summary,
             )
-        paper = PaperSynthesizer(self.filesystem.base_dir, runtime=self.agent_runtime).synthesize(project_id)
+        if not stopping_criteria_satisfied and result_summary == "unfinished":
+            result_summary = "max runs exhausted before stopping criteria were satisfied"
+        project_status = "complete" if stopping_criteria_satisfied else "incomplete"
+        paper = PaperSynthesizer(self.filesystem.base_dir, runtime=self.agent_runtime).synthesize(
+            project_id,
+            final=stopping_criteria_satisfied,
+            completion_reason=result_summary,
+            project_status=project_status,
+        )
         self._update_causal_dag(project_dir / "causal_dag.json", project_id)
         self.taste_persistence.save_after_project(project_id, taste_model)
         self.taste_persistence.merge_project_data(project_id, ledger.get_pareto_frontier())
         self.filesystem.write_project_state(
             project_id,
             {
-                "status": "complete",
+                "status": project_status,
                 "run_count": run_n,
-                "last_run_status": result_summary,
+                "last_run_status": {
+                    "run_n": run_n,
+                    "summary": result_summary,
+                    "stopping_criteria_satisfied": stopping_criteria_satisfied,
+                },
                 "paper_path": paper["pdf_path"],
             },
         )
         return ProjectResult(
             project_id=project_id,
-            status="complete",
+            status=project_status,
             paper_path=paper["pdf_path"],
             run_count=run_n,
             summary=result_summary,
@@ -311,10 +344,21 @@ class MetaHarnessLoop:
                 "domain": config.domain,
                 "success_criteria": config.success_criteria,
                 "failed_iterations": failed_iterations,
+                **self._execution_context(project_dir, run_n),
             },
             budget={"max_runs": 1, "compute_budget": config.compute_budget},
         )
-        if task_node and getattr(task_node, "requires_ml_optimizer", False):
+        generic_result = self._execute_agent_work(
+            project_dir=project_dir,
+            run_n=run_n,
+            task_node=task_node,
+            summary_parts=summary_parts,
+            agent_result=agent_result,
+            artifact_dir=artifact_dir,
+        )
+        if generic_result is not None:
+            artifact_payload = generic_result
+        elif self._should_use_optimizer(task_node=task_node, config=config, agent_result=agent_result):
             proposals = self._resolve_experiment_proposals(
                 task_node=task_node,
                 config=config,
@@ -386,20 +430,16 @@ class MetaHarnessLoop:
                 },
             }
         else:
-            artifact_files = []
-            for artifact in agent_result.get("artifact_plan", []):
-                path = artifact_dir / artifact["path"]
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(artifact.get("content", ""), encoding="utf-8")
-                artifact_files.append(str(path))
             artifact_payload = {
                 "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
                 "summary": " ".join(summary_parts + [agent_result.get("summary", "")]).strip(),
-                "primary_metric": 1.0 if failed_iterations == 0 else 0.85,
-                "code_path": artifact_files[0] if artifact_files else "",
+                "primary_metric": 0.0,
+                "code_path": "",
                 "errors": [],
                 "artifact_dir": str(artifact_dir),
-                "generated_artifacts": artifact_files,
+                "generated_artifacts": [],
+                "executed_commands": [],
+                "command_results": [],
                 "citations": agent_result.get("citations", []),
                 "agent_runtime": {
                     "provider": agent_result.get("provider"),
@@ -419,6 +459,190 @@ class MetaHarnessLoop:
                 "model": agent_result.get("model"),
             },
             "result": artifact_payload,
+        }
+
+    def _execute_agent_work(
+        self,
+        *,
+        project_dir: Path,
+        run_n: int,
+        task_node: Any,
+        summary_parts: list[str],
+        agent_result: dict[str, Any],
+        artifact_dir: Path,
+    ) -> dict[str, Any] | None:
+        artifact_files = self._materialize_artifact_plan(artifact_dir, agent_result.get("artifact_plan", []))
+        command_results = self._run_command_plan(
+            project_dir=project_dir,
+            artifact_dir=artifact_dir,
+            command_plan=agent_result.get("command_plan", []),
+        )
+        generated_files = sorted(
+            str(path)
+            for path in artifact_dir.rglob("*")
+            if path.is_file() and path.name not in {"result.json", "command_results.json"}
+        )
+        substantive_files = [path for path in generated_files if not path.endswith((".stdout.log", ".stderr.log"))]
+        if not artifact_files and not command_results and not substantive_files:
+            return None
+        command_successes = sum(1 for item in command_results if item.get("returncode", 1) == 0)
+        command_total = len(command_results)
+        command_success_ratio = command_successes / command_total if command_total else 1.0
+        primary_metric = round(command_success_ratio if substantive_files else 0.0, 6)
+        if command_results:
+            (artifact_dir / "command_results.json").write_text(json.dumps(command_results, indent=2), encoding="utf-8")
+        result_payload = {
+            "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
+            "summary": " ".join(summary_parts + [agent_result.get("summary", "")]).strip(),
+            "primary_metric": primary_metric,
+            "generated_artifacts": substantive_files,
+            "executed_commands": [item.get("command", "") for item in command_results],
+            "command_results": command_results,
+            "citations": agent_result.get("citations", []),
+            "agent_runtime": {
+                "provider": agent_result.get("provider"),
+                "model": agent_result.get("model"),
+                "next_action": agent_result.get("next_action"),
+            },
+            "artifact_dir": str(artifact_dir),
+            "code_path": substantive_files[0] if substantive_files else "",
+            "errors": [item.get("stderr_path", "") for item in command_results if item.get("returncode", 0) != 0],
+            "status": "keep" if substantive_files and command_success_ratio > 0.0 else "discard",
+        }
+        (artifact_dir / "result.json").write_text(json.dumps(result_payload, indent=2), encoding="utf-8")
+        return result_payload
+
+    def _materialize_artifact_plan(self, artifact_dir: Path, artifact_plan: list[Any]) -> list[str]:
+        artifact_files: list[str] = []
+        for artifact in artifact_plan:
+            if not isinstance(artifact, dict):
+                continue
+            relative_path = str(artifact.get("path", "")).strip()
+            if not relative_path:
+                continue
+            path = artifact_dir / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(artifact.get("content", "")), encoding="utf-8")
+            artifact_files.append(str(path))
+        return artifact_files
+
+    def _run_command_plan(
+        self,
+        *,
+        project_dir: Path,
+        artifact_dir: Path,
+        command_plan: list[Any],
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for index, entry in enumerate(command_plan, start=1):
+            parsed = self._parse_command_entry(entry, project_dir=project_dir, artifact_dir=artifact_dir)
+            if parsed is None:
+                continue
+            command, cwd, timeout = parsed
+            stdout_path = artifact_dir / f"command_{index}.stdout.log"
+            stderr_path = artifact_dir / f"command_{index}.stderr.log"
+            process = subprocess.run(
+                command,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+            stdout_path.write_text(process.stdout, encoding="utf-8")
+            stderr_path.write_text(process.stderr, encoding="utf-8")
+            results.append(
+                {
+                    "command": " ".join(command),
+                    "cwd": str(cwd),
+                    "returncode": process.returncode,
+                    "stdout_path": str(stdout_path),
+                    "stderr_path": str(stderr_path),
+                }
+            )
+            if process.returncode != 0:
+                break
+        return results
+
+    def _parse_command_entry(
+        self,
+        entry: Any,
+        *,
+        project_dir: Path,
+        artifact_dir: Path,
+    ) -> tuple[list[str], Path, int] | None:
+        if isinstance(entry, str) and entry.strip():
+            return shlex.split(entry), artifact_dir, 300
+        if not isinstance(entry, dict):
+            return None
+        command_value = entry.get("command")
+        if isinstance(command_value, str) and command_value.strip():
+            command = shlex.split(command_value)
+        elif isinstance(command_value, list) and all(isinstance(part, str) for part in command_value):
+            command = list(command_value)
+        else:
+            return None
+        cwd_value = str(entry.get("cwd", ".")).strip() or "."
+        cwd = Path(cwd_value)
+        if not cwd.is_absolute():
+            base = project_dir if cwd_value.startswith("project:") else artifact_dir
+            relative = cwd_value.removeprefix("project:")
+            cwd = (base / relative).resolve()
+        timeout = int(entry.get("timeout_seconds", 300))
+        return command, cwd, timeout
+
+    def _should_use_optimizer(self, *, task_node: Any, config: ProjectConfig, agent_result: dict[str, Any]) -> bool:
+        return bool(
+            task_node
+            and getattr(task_node, "requires_ml_optimizer", False)
+            and config.domain == "ml_efficiency"
+            and agent_result.get("experiment_plan")
+        )
+
+    def _execution_context(self, project_dir: Path, run_n: int) -> dict[str, Any]:
+        prior_runs: list[dict[str, Any]] = []
+        verification_failures: list[str] = []
+        for prior_run in range(max(1, run_n - 2), run_n):
+            run_dir = project_dir / "runs" / str(prior_run)
+            result_path = run_dir / "result.json"
+            verification_path = run_dir / "verification_report.json"
+            payload: dict[str, Any] = {"run_n": prior_run}
+            if result_path.exists():
+                result = self.filesystem.read_json(result_path)
+                payload["summary"] = result.get("summary", "")
+                payload["generated_artifacts"] = result.get("generated_artifacts", [])
+                payload["executed_commands"] = result.get("executed_commands", [])
+            if verification_path.exists():
+                verification = self.filesystem.read_json(verification_path)
+                failed_checks = [
+                    str(check.get("name", "unknown"))
+                    for check in verification.get("checks", [])
+                    if not self.verification._is_check_passing(check)
+                ]
+                payload["verification_failures"] = failed_checks
+                verification_failures.extend(failed_checks)
+            prior_runs.append(payload)
+        return {
+            "prior_runs": prior_runs,
+            "verification_failures": verification_failures,
+        }
+
+    def _build_run_status(
+        self,
+        *,
+        run_n: int,
+        summary: str,
+        stopping_decision: dict[str, Any],
+        verification: dict[str, Any],
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "run_n": run_n,
+            "summary": summary,
+            "stopping_decision": stopping_decision,
+            "verification_passed": bool(verification.get("passed", False)),
+            "task_id": result.get("task_id"),
+            "artifact_dir": result.get("artifact_dir"),
         }
 
     def _run_adversarial_check(self, outputs: dict[str, Any], criteria: list[str]):
