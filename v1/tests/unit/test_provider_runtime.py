@@ -125,3 +125,25 @@ def test_provider_runtime_reports_unknown_category(tmp_path):
     with pytest.raises(ProviderRuntimeError) as excinfo:
         runtime.generate_task(category="missing", instruction="do work", context={"task": "x"})
     assert excinfo.value.error_class == "unknown_category"
+
+
+def test_provider_runtime_accepts_legacy_providers_key(tmp_path):
+    config_path = tmp_path / "runtime.jsonc"
+    config_path.write_text(
+        json_module.dumps(
+            {
+                "providers": {
+                    "sisyphus": {
+                        "provider": "ollama",
+                        "model": "gemma4",
+                        "fallbacks": ["llama3.2:3b"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = CodingAgentRuntime(config_path, session=_Session())
+    assert runtime.categories["sisyphus"].model == "gemma4"
+    assert runtime.categories["sisyphus"].temperature == 0.2
+    assert runtime.categories["sisyphus"].max_tokens == 1024

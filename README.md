@@ -62,7 +62,13 @@ python -m pip install -U pip setuptools wheel
 python -m pip install -e ".[dev,data,verification,paper,ml,domain]"
 ```
 
-For Apple Silicon Macs running an Intel (`x86_64`) conda env, do not install `ml-accelerated`: recent PyTorch pip wheels are not available there, and Genesis already falls back to non-PyTorch implementations for the affected paths.
+For Apple Silicon Macs running an Intel (`x86_64`) conda env, the accelerated stack needs older compatible Hugging Face packages because current `transformers` 5.x expects newer PyTorch than those wheels provide. Genesis supports that env with:
+
+```bash
+python -m pip uninstall -y transformers sentence-transformers torch torch-geometric gpytorch
+python -m pip install --upgrade --force-reinstall "numpy<2"
+python -m pip install -e ".[dev,data,verification,paper,ml,ml-accelerated,domain]"
+```
 
 If you are on a native environment that supports modern PyTorch wheels and want the accelerated stack too:
 

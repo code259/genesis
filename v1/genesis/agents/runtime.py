@@ -101,7 +101,8 @@ class CodingAgentRuntime:
         cleaned = self._strip_jsonc_comments(raw)
         payload = json.loads(cleaned)
         categories: dict[str, CategoryConfig] = {}
-        for name, config in payload.get("categories", {}).items():
+        config_block = payload.get("categories") or payload.get("providers") or {}
+        for name, config in config_block.items():
             categories[name] = CategoryConfig(
                 provider=config["provider"],
                 model=config["model"],

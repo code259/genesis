@@ -28,10 +28,12 @@ ml = [
   "scipy>=1.11",
 ]
 ml-accelerated = [
+  "torch>=2.1,<2.4; platform_system == 'Darwin' and platform_machine == 'x86_64'",
   "torch>=2.4; platform_system != 'Darwin' or platform_machine != 'x86_64'",
-  "sentence-transformers>=3.0; platform_system != 'Darwin' or platform_machine != 'x86_64'",
-  "torch-geometric>=2.5; platform_system != 'Darwin' or platform_machine != 'x86_64'",
-  "gpytorch>=1.11; platform_system != 'Darwin' or platform_machine != 'x86_64'",
+  "transformers>=4.34,<5",
+  "sentence-transformers>=3.0,<5",
+  "torch-geometric>=2.5",
+  "gpytorch>=1.11",
 ]
 data = [
   "alembic>=1.13",

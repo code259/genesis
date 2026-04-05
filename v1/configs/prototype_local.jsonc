@@ -3,7 +3,7 @@
   "providers": {
     "sisyphus": {
       "provider": "ollama",
-      "model": "qwen2.5-coder:14b",
+      "model": "gemma4",
       "fallbacks": ["llama3.3:70b", "llama3.2:3b"]
     },
     "fast": {
