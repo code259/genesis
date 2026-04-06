@@ -1,6 +1,7 @@
 import json
 
 import pytest
+import requests
 
 from genesis.agents.runtime import CodingAgentRuntime, ProviderRuntimeError
 
@@ -26,7 +27,7 @@ class _Session:
                         "content": json_module.dumps(
                             {
                                 "summary": "ok",
-                                "artifact_plan": [],
+                                "artifact_plan": [{"path": "notes.md", "content": "ok"}],
                                 "experiment_plan": [],
                                 "citations": [],
                                 "next_action": "continue",
@@ -64,6 +65,31 @@ def test_provider_runtime_parses_ollama_response(tmp_path):
     assert payload["summary"] == "ok"
 
 
+def test_provider_runtime_disables_env_proxy_in_session(tmp_path):
+    config_path = tmp_path / "runtime.jsonc"
+    config_path.write_text(
+        json_module.dumps(
+            {
+                "categories": {
+                    "sisyphus": {
+                        "provider": "ollama",
+                        "model": "test-model",
+                        "fallbacks": [],
+                        "temperature": 0.2,
+                        "max_tokens": 100,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    session = requests.Session()
+    session.trust_env = True
+    runtime = CodingAgentRuntime(config_path, session=session)
+    assert runtime.session.trust_env is False
+    assert runtime.timeout == 600
+
+
 def test_provider_runtime_strips_jsonc_comments_without_breaking_urls(tmp_path):
     config_path = tmp_path / "runtime.jsonc"
     config_path.write_text(
@@ -98,6 +124,37 @@ def test_provider_runtime_normalizes_missing_response_fields(tmp_path):
         json_module.dumps(
             {
                 "categories": {
+                    "genesis-paper": {
+                        "provider": "ollama",
+                        "model": "test-model",
+                        "fallbacks": [],
+                        "temperature": 0.2,
+                        "max_tokens": 100,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = CodingAgentRuntime(config_path, session=_MinimalSession())
+    payload = runtime.generate_task(category="genesis-paper", instruction="do work", context={"task": "x"})
+    assert payload["artifact_plan"] == []
+    assert payload["command_plan"] == []
+    assert payload["experiment_plan"] == []
+    assert payload["citations"] == []
+    assert payload["next_action"] == "continue"
+
+
+def test_provider_runtime_rejects_non_actionable_sisyphus_response(tmp_path):
+    class _MinimalSession:
+        def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
+            return _Response({"message": {"content": '{"summary":"ok","next_action":"continue"}'}})
+
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(
+        json_module.dumps(
+            {
+                "categories": {
                     "sisyphus": {
                         "provider": "ollama",
                         "model": "test-model",
@@ -111,12 +168,43 @@ def test_provider_runtime_normalizes_missing_response_fields(tmp_path):
         encoding="utf-8",
     )
     runtime = CodingAgentRuntime(config_path, session=_MinimalSession())
-    payload = runtime.generate_task(category="sisyphus", instruction="do work", context={"task": "x"})
-    assert payload["artifact_plan"] == []
-    assert payload["command_plan"] == []
-    assert payload["experiment_plan"] == []
-    assert payload["citations"] == []
-    assert payload["next_action"] == "continue"
+    with pytest.raises(ProviderRuntimeError) as excinfo:
+        runtime.generate_task(category="sisyphus", instruction="do work", context={"task": "x"})
+    assert excinfo.value.error_class == "non_actionable_plan"
+
+
+def test_provider_runtime_requires_artifact_for_workspace_script_command(tmp_path):
+    class _MinimalSession:
+        def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
+            return _Response(
+                {
+                    "message": {
+                        "content": '{"summary":"ok","command_plan":["python bls_search.py -i TIC_165202476.csv -o out.txt"],"next_action":"continue"}'
+                    }
+                }
+            )
+
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(
+        json_module.dumps(
+            {
+                "categories": {
+                    "sisyphus": {
+                        "provider": "ollama",
+                        "model": "test-model",
+                        "fallbacks": [],
+                        "temperature": 0.2,
+                        "max_tokens": 100,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = CodingAgentRuntime(config_path, session=_MinimalSession())
+    with pytest.raises(ProviderRuntimeError) as excinfo:
+        runtime.generate_task(category="sisyphus", instruction="do work", context={"task": "x"})
+    assert excinfo.value.error_class == "command_plan_missing_artifact"
 
 
 def test_provider_runtime_reports_unknown_category(tmp_path):
@@ -153,4 +241,4 @@ def test_provider_runtime_accepts_legacy_providers_key(tmp_path):
 def test_live_runtime_config_uses_gemma4():
     config_path = "/Users/nikhilmaturi/Files/Projects/genesis/v1/.opencode/oh-my-openagent.jsonc"
     runtime = CodingAgentRuntime(config_path, session=_Session())
-    assert runtime.categories["sisyphus"].model == "gemma4"
+    assert runtime.categories["sisyphus"].model == "gemma4:e4b"

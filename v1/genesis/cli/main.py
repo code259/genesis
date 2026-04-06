@@ -60,7 +60,7 @@ def init_project(spec_path: Optional[Path], interactive: bool, project_id: Optio
 @main.command("run")
 @click.option("--project-id", required=False)
 @click.option("--spec", "spec_path", type=click.Path(exists=True, path_type=Path), required=True)
-@click.option("--max-runs", default=3, show_default=True, type=int)
+@click.option("--max-runs", default=50, show_default=True, type=int)
 def run_project(project_id: Optional[str], spec_path: Path, max_runs: int) -> None:
     config = load_project_config(spec_path)
     project_id = project_id or uuid.uuid4().hex[:8]

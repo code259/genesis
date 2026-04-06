@@ -3,7 +3,7 @@
   "providers": {
     "sisyphus": {
       "provider": "ollama",
-      "model": "gemma4",
+      "model": "gemma4:e4b",
       "fallbacks": ["llama3.2:3b"]
     },
     "fast": {

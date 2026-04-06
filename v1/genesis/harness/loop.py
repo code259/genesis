@@ -40,6 +40,7 @@ from .history_reader import SelectiveHistoryReader
 class MetaHarnessLoop:
     ADVERSARIAL_ITERATION_LIMIT = 3
     ESCALATION_RETRY_LIMIT = 2
+    REPEATED_FAILURE_LIMIT = 3
 
     def __init__(
         self,
@@ -65,7 +66,7 @@ class MetaHarnessLoop:
         self.feature_extractor = ExperimentFeatureExtractor()
         self.executor = executor or self._default_executor
 
-    def run(self, project_id: str, config: ProjectConfig, max_runs: int = 3) -> ProjectResult:
+    def run(self, project_id: str, config: ProjectConfig, max_runs: int = 50) -> ProjectResult:
         project_dir = self.filesystem.init_project(project_id, config.to_dict())
         try:
             ledger = ExperimentLedger(project_dir / "experiments" / "ledger.sqlite3")
@@ -98,6 +99,7 @@ class MetaHarnessLoop:
         redirect_message = ""
         run_n = 0
         stopping_criteria_satisfied = False
+        repeated_failure_counts: dict[str, int] = {}
 
         result_summary = "unfinished"
         for run_n in range(1, max_runs + 1):
@@ -194,6 +196,7 @@ class MetaHarnessLoop:
                     "verification_passed": verification["passed"],
                 },
             )
+            repeated_failure_counts = self._update_repeated_failures(repeated_failure_counts, execution["result"])
             if self._check_stopping_criteria(report) and verification["passed"]:
                 result_summary = "stopping criteria satisfied"
                 stopping_criteria_satisfied = True
@@ -236,6 +239,9 @@ class MetaHarnessLoop:
                     "Change approach: prior attempts failed verification/adversarial gating. "
                     "Use a materially different tactic and surface the rationale."
                 )
+                stubborn_failure = self._repeated_failure_message(repeated_failure_counts)
+                if stubborn_failure:
+                    redirect_message += f" Avoid repeating failure pattern: {stubborn_failure}."
                 self.filesystem.write_json(
                     run_dir / "escalation_report.json",
                     {
@@ -335,19 +341,58 @@ class MetaHarnessLoop:
         artifact_dir = project_dir / "outputs" / "code" / f"run_{run_n}"
         artifact_dir.mkdir(parents=True, exist_ok=True)
         summary_parts = [f"Run {run_n} investigates {active_task}."]
-        agent_result = self.agent_runtime.generate_task(
-            category="sisyphus",
-            instruction=f"Execute research task: {active_task}",
-            context={
-                "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
-                "research_question": config.research_question,
-                "domain": config.domain,
-                "success_criteria": config.success_criteria,
-                "failed_iterations": failed_iterations,
-                **self._execution_context(project_dir, run_n),
-            },
-            budget={"max_runs": 1, "compute_budget": config.compute_budget},
-        )
+        try:
+            agent_result = self.agent_runtime.generate_task(
+                category="sisyphus",
+                instruction=f"Execute research task: {active_task}",
+                context={
+                    "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
+                    "research_question": config.research_question,
+                    "domain": config.domain,
+                    "success_criteria": config.success_criteria,
+                    "failed_iterations": failed_iterations,
+                    **self._execution_context(project_dir, run_n),
+                },
+                budget={"max_runs": 1, "compute_budget": config.compute_budget},
+            )
+        except ProviderRuntimeError as exc:
+            if exc.error_class == "non_actionable_plan":
+                return {
+                    "trace": {
+                        "instruction_used": run_n,
+                        "task": active_task,
+                        "failed_iterations": failed_iterations,
+                        "provider": None,
+                        "model": None,
+                        "attempted_models": [],
+                        "fallback_used": False,
+                    },
+                    "result": {
+                        "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
+                        "summary": " ".join(summary_parts).strip(),
+                        "primary_metric": 0.0,
+                        "code_path": "",
+                        "errors": [],
+                        "artifact_dir": str(artifact_dir),
+                        "generated_artifacts": [],
+                        "executed_commands": [],
+                        "command_results": [],
+                        "classification": "non_actionable_plan",
+                        "failure_type": exc.error_class,
+                        "failure_summary": str(exc),
+                        "failed_command": "",
+                        "citations": [],
+                        "agent_runtime": {
+                            "provider": None,
+                            "model": None,
+                            "primary_model": None,
+                            "attempted_models": [],
+                            "fallback_used": False,
+                            "next_action": "continue",
+                        },
+                    },
+                }
+            raise
         generic_result = self._execute_agent_work(
             project_dir=project_dir,
             run_n=run_n,
@@ -422,14 +467,26 @@ class MetaHarnessLoop:
                 "errors": [],
                 "artifact_dir": str(Path(best.artifact_path).parent),
                 "selected_experiment": best.to_dict(),
+                "classification": "success",
+                "failure_type": "",
+                "failure_summary": "",
+                "failed_command": "",
                 "citations": agent_result.get("citations", []),
                 "agent_runtime": {
                     "provider": agent_result.get("provider"),
                     "model": agent_result.get("model"),
+                    "primary_model": agent_result.get("primary_model"),
+                    "attempted_models": agent_result.get("attempted_models", []),
+                    "fallback_used": agent_result.get("fallback_used", False),
                     "next_action": agent_result.get("next_action"),
                 },
             }
         else:
+            failure_type = "non_actionable_plan"
+            failure_summary = "model returned no files, commands, or usable experiment plan"
+            if self._next_action_requires_verified_work(str(agent_result.get("next_action", ""))):
+                failure_type = "invalid_next_action"
+                failure_summary = "model proposed publication/finalization without substantive verified artifacts"
             artifact_payload = {
                 "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
                 "summary": " ".join(summary_parts + [agent_result.get("summary", "")]).strip(),
@@ -440,10 +497,17 @@ class MetaHarnessLoop:
                 "generated_artifacts": [],
                 "executed_commands": [],
                 "command_results": [],
+                "classification": failure_type,
+                "failure_type": failure_type,
+                "failure_summary": failure_summary,
+                "failed_command": "",
                 "citations": agent_result.get("citations", []),
                 "agent_runtime": {
                     "provider": agent_result.get("provider"),
                     "model": agent_result.get("model"),
+                    "primary_model": agent_result.get("primary_model"),
+                    "attempted_models": agent_result.get("attempted_models", []),
+                    "fallback_used": agent_result.get("fallback_used", False),
                     "next_action": agent_result.get("next_action"),
                 },
             }
@@ -457,6 +521,8 @@ class MetaHarnessLoop:
                 "failed_iterations": failed_iterations,
                 "provider": agent_result.get("provider"),
                 "model": agent_result.get("model"),
+                "attempted_models": agent_result.get("attempted_models", []),
+                "fallback_used": agent_result.get("fallback_used", False),
             },
             "result": artifact_payload,
         }
@@ -488,6 +554,19 @@ class MetaHarnessLoop:
         command_successes = sum(1 for item in command_results if item.get("returncode", 1) == 0)
         command_total = len(command_results)
         command_success_ratio = command_successes / command_total if command_total else 1.0
+        last_failure = next((item for item in reversed(command_results) if item.get("returncode", 0) != 0), None)
+        classification = "success"
+        failure_type = ""
+        failure_summary = ""
+        next_action = str(agent_result.get("next_action", ""))
+        if last_failure is not None:
+            classification = "command_failure"
+            failure_type = str(last_failure.get("failure_type", "command_failure"))
+            failure_summary = str(last_failure.get("failure_summary", "command failed"))
+        elif self._next_action_requires_verified_work(next_action):
+            classification = "invalid_next_action"
+            failure_type = "invalid_next_action"
+            failure_summary = "model proposed publication/finalization before substantive verified work existed"
         primary_metric = round(command_success_ratio if substantive_files else 0.0, 6)
         if command_results:
             (artifact_dir / "command_results.json").write_text(json.dumps(command_results, indent=2), encoding="utf-8")
@@ -498,16 +577,23 @@ class MetaHarnessLoop:
             "generated_artifacts": substantive_files,
             "executed_commands": [item.get("command", "") for item in command_results],
             "command_results": command_results,
+            "classification": classification,
+            "failure_type": failure_type,
+            "failure_summary": failure_summary,
+            "failed_command": str(last_failure.get("command", "")) if last_failure else "",
             "citations": agent_result.get("citations", []),
             "agent_runtime": {
                 "provider": agent_result.get("provider"),
                 "model": agent_result.get("model"),
+                "primary_model": agent_result.get("primary_model"),
+                "attempted_models": agent_result.get("attempted_models", []),
+                "fallback_used": agent_result.get("fallback_used", False),
                 "next_action": agent_result.get("next_action"),
             },
             "artifact_dir": str(artifact_dir),
             "code_path": substantive_files[0] if substantive_files else "",
             "errors": [item.get("stderr_path", "") for item in command_results if item.get("returncode", 0) != 0],
-            "status": "keep" if substantive_files and command_success_ratio > 0.0 else "discard",
+            "status": "keep" if classification == "success" and substantive_files and command_success_ratio > 0.0 else "discard",
         }
         (artifact_dir / "result.json").write_text(json.dumps(result_payload, indent=2), encoding="utf-8")
         return result_payload
@@ -537,30 +623,76 @@ class MetaHarnessLoop:
         for index, entry in enumerate(command_plan, start=1):
             parsed = self._parse_command_entry(entry, project_dir=project_dir, artifact_dir=artifact_dir)
             if parsed is None:
-                continue
+                results.append(
+                    {
+                        "command": "",
+                        "cwd": str(artifact_dir),
+                        "returncode": 127,
+                        "stdout_path": "",
+                        "stderr_path": "",
+                        "failure_type": "command_plan_invalid",
+                        "failure_summary": "command entry was missing or malformed",
+                    }
+                )
+                break
+            if isinstance(parsed, dict):
+                results.append(parsed)
+                break
             command, cwd, timeout = parsed
             stdout_path = artifact_dir / f"command_{index}.stdout.log"
             stderr_path = artifact_dir / f"command_{index}.stderr.log"
-            process = subprocess.run(
-                command,
-                cwd=str(cwd),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout,
-            )
-            stdout_path.write_text(process.stdout, encoding="utf-8")
-            stderr_path.write_text(process.stderr, encoding="utf-8")
-            results.append(
-                {
-                    "command": " ".join(command),
-                    "cwd": str(cwd),
-                    "returncode": process.returncode,
-                    "stdout_path": str(stdout_path),
-                    "stderr_path": str(stderr_path),
-                }
-            )
-            if process.returncode != 0:
+            try:
+                process = subprocess.run(
+                    command,
+                    cwd=str(cwd),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=timeout,
+                )
+                stdout_path.write_text(process.stdout, encoding="utf-8")
+                stderr_path.write_text(process.stderr, encoding="utf-8")
+                results.append(
+                    {
+                        "command": " ".join(command),
+                        "cwd": str(cwd),
+                        "returncode": process.returncode,
+                        "stdout_path": str(stdout_path),
+                        "stderr_path": str(stderr_path),
+                        "failure_type": "command_failure" if process.returncode != 0 else "",
+                        "failure_summary": "command returned non-zero exit status" if process.returncode != 0 else "",
+                    }
+                )
+                if process.returncode != 0:
+                    break
+            except FileNotFoundError:
+                stderr_path.write_text("command not found", encoding="utf-8")
+                results.append(
+                    {
+                        "command": " ".join(command),
+                        "cwd": str(cwd),
+                        "returncode": 127,
+                        "stdout_path": str(stdout_path),
+                        "stderr_path": str(stderr_path),
+                        "failure_type": "command_not_found",
+                        "failure_summary": "executable or script was not found",
+                    }
+                )
+                break
+            except subprocess.TimeoutExpired as exc:
+                stdout_path.write_text(exc.stdout or "", encoding="utf-8")
+                stderr_path.write_text(exc.stderr or "command timed out", encoding="utf-8")
+                results.append(
+                    {
+                        "command": " ".join(command),
+                        "cwd": str(cwd),
+                        "returncode": 124,
+                        "stdout_path": str(stdout_path),
+                        "stderr_path": str(stderr_path),
+                        "failure_type": "command_timeout",
+                        "failure_summary": "command exceeded timeout",
+                    }
+                )
                 break
         return results
 
@@ -570,7 +702,7 @@ class MetaHarnessLoop:
         *,
         project_dir: Path,
         artifact_dir: Path,
-    ) -> tuple[list[str], Path, int] | None:
+    ) -> tuple[list[str], Path, int] | dict[str, Any] | None:
         if isinstance(entry, str) and entry.strip():
             return shlex.split(entry), artifact_dir, 300
         if not isinstance(entry, dict):
@@ -589,6 +721,16 @@ class MetaHarnessLoop:
             relative = cwd_value.removeprefix("project:")
             cwd = (base / relative).resolve()
         timeout = int(entry.get("timeout_seconds", 300))
+        if not command:
+            return {
+                "command": "",
+                "cwd": str(cwd),
+                "returncode": 127,
+                "stdout_path": "",
+                "stderr_path": "",
+                "failure_type": "command_plan_invalid",
+                "failure_summary": "empty command entry",
+            }
         return command, cwd, timeout
 
     def _should_use_optimizer(self, *, task_node: Any, config: ProjectConfig, agent_result: dict[str, Any]) -> bool:
@@ -612,6 +754,9 @@ class MetaHarnessLoop:
                 payload["summary"] = result.get("summary", "")
                 payload["generated_artifacts"] = result.get("generated_artifacts", [])
                 payload["executed_commands"] = result.get("executed_commands", [])
+                payload["classification"] = result.get("classification", "")
+                payload["failure_type"] = result.get("failure_type", "")
+                payload["failure_summary"] = result.get("failure_summary", "")
             if verification_path.exists():
                 verification = self.filesystem.read_json(verification_path)
                 failed_checks = [
@@ -643,7 +788,36 @@ class MetaHarnessLoop:
             "verification_passed": bool(verification.get("passed", False)),
             "task_id": result.get("task_id"),
             "artifact_dir": result.get("artifact_dir"),
+            "classification": result.get("classification", ""),
+            "failure_type": result.get("failure_type", ""),
         }
+
+    def _update_repeated_failures(
+        self,
+        counters: dict[str, int],
+        result: dict[str, Any],
+    ) -> dict[str, int]:
+        classification = str(result.get("classification", "")).strip()
+        failure_type = str(result.get("failure_type", "")).strip()
+        failed_command = str(result.get("failed_command", "")).strip()
+        if not classification or classification == "success":
+            return {}
+        key = "|".join(part for part in (classification, failure_type, failed_command) if part)
+        updated = dict(counters)
+        updated[key] = updated.get(key, 0) + 1
+        return updated
+
+    def _repeated_failure_message(self, counters: dict[str, int]) -> str:
+        if not counters:
+            return ""
+        key, count = max(counters.items(), key=lambda item: item[1])
+        if count < self.REPEATED_FAILURE_LIMIT:
+            return ""
+        return key
+
+    def _next_action_requires_verified_work(self, next_action: str) -> bool:
+        lowered = next_action.lower()
+        return any(token in lowered for token in ("publish", "publication", "submit", "finalize", "journal"))
 
     def _run_adversarial_check(self, outputs: dict[str, Any], criteria: list[str]):
         import asyncio

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -43,10 +44,12 @@ class CodingAgentRuntime:
         config_path: str | Path,
         *,
         session: Optional[requests.Session] = None,
-        timeout: int = 120,
+        timeout: int = 600,
     ) -> None:
         self.config_path = Path(config_path)
         self.session = session or requests.Session()
+        if hasattr(self.session, "trust_env"):
+            self.session.trust_env = False
         self.timeout = timeout
         self.api_config = load_api_config()
         self.categories = self._load_categories()
@@ -78,8 +81,12 @@ class CodingAgentRuntime:
                 else:
                     raise ProviderRuntimeError(f"unsupported provider: {category_config.provider}")
                 payload = self._normalize_payload(self._parse_payload(content), category)
+                self._validate_execution_payload(payload, category)
                 payload["provider"] = category_config.provider
                 payload["model"] = model
+                payload["primary_model"] = category_config.model
+                payload["attempted_models"] = [category_config.model] + list(category_config.fallbacks)
+                payload["fallback_used"] = model != category_config.model
                 payload["raw_response"] = content
                 payload["retryable"] = False
                 payload["error_class"] = None
@@ -155,6 +162,10 @@ class CodingAgentRuntime:
         return (
             "You are the Genesis coding agent runtime.\n"
             f"Return valid JSON only with keys: {', '.join(schema)}.\n"
+            "For execution categories, do not claim task completion without emitting actionable work.\n"
+            "A valid execution response must include at least one of artifact_plan, command_plan, or experiment_plan.\n"
+            "Commands must be literal executable shell commands. Do not invent tool names or pseudocode.\n"
+            "Do not suggest publication, submission, or finalization unless substantive verified artifacts already exist.\n"
             f"Category: {category}\n"
             f"Instruction:\n{instruction}\n\n"
             f"Context:\n{json.dumps(context, indent=2)}\n\n"
@@ -250,6 +261,56 @@ class CodingAgentRuntime:
             if string_key in normalized and not isinstance(normalized[string_key], str):
                 normalized[string_key] = str(normalized[string_key])
         return normalized
+
+    def _validate_execution_payload(self, payload: dict[str, Any], category: str) -> None:
+        if category != "sisyphus":
+            return
+        has_actions = any(
+            isinstance(payload.get(key), list) and bool(payload.get(key))
+            for key in ("artifact_plan", "command_plan", "experiment_plan")
+        )
+        if not has_actions:
+            raise ProviderRuntimeError(
+                "non-actionable execution response: expected artifact_plan, command_plan, or experiment_plan",
+                error_class="non_actionable_plan",
+                retryable=True,
+            )
+        artifact_paths = {
+            str(item.get("path", "")).strip()
+            for item in payload.get("artifact_plan", [])
+            if isinstance(item, dict) and str(item.get("path", "")).strip()
+        }
+        for command_entry in payload.get("command_plan", []):
+            command = self._command_tokens(command_entry)
+            referenced_file = self._workspace_file_reference(command)
+            if referenced_file and referenced_file not in artifact_paths:
+                raise ProviderRuntimeError(
+                    f"command_plan references workspace file '{referenced_file}' without creating it in artifact_plan",
+                    error_class="command_plan_missing_artifact",
+                    retryable=True,
+                )
+
+    def _command_tokens(self, entry: Any) -> list[str]:
+        if isinstance(entry, str) and entry.strip():
+            return shlex.split(entry)
+        if isinstance(entry, dict):
+            command_value = entry.get("command")
+            if isinstance(command_value, str) and command_value.strip():
+                return shlex.split(command_value)
+            if isinstance(command_value, list) and all(isinstance(part, str) for part in command_value):
+                return list(command_value)
+        return []
+
+    def _workspace_file_reference(self, command: list[str]) -> str:
+        for token in command[1:]:
+            cleaned = token.strip()
+            if not cleaned or cleaned.startswith("-"):
+                continue
+            if "/" in cleaned or "." in Path(cleaned).name:
+                name = Path(cleaned).name
+                if name.endswith((".py", ".sh", ".ipynb", ".R", ".jl")):
+                    return cleaned
+        return ""
 
     def _extract_json_object(self, content: str) -> Optional[str]:
         fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)

@@ -13,6 +13,7 @@ def test_cli_status_results_and_intervention(tmp_path, monkeypatch):
         lambda self, **kwargs: {
             "summary": "Provider executed task successfully.",
             "artifact_plan": [{"path": "notes.md", "content": "generated note"}],
+            "command_plan": [],
             "experiment_plan": [],
             "citations": [],
             "next_action": "continue",

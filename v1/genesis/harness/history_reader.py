@@ -52,13 +52,25 @@ class SelectiveHistoryReader:
 
     def summarize_experiment_history(self, project_id: str) -> str:
         results = self.get_top_k_results(project_id, k=5)
-        lines = []
+        progress_lines = []
+        failure_lines = []
         for result in results:
             task_id = result.get("task_id", "unknown")
             metric = result.get("primary_metric", 0)
             summary = str(result.get("summary", "")).strip()
-            line = f"- {task_id}: metric={metric}"
-            if summary:
-                line += f" | {summary}"
-            lines.append(line)
+            classification = str(result.get("classification", "")).strip()
+            generated_artifacts = result.get("generated_artifacts", [])
+            executed_commands = result.get("executed_commands", [])
+            failure_summary = str(result.get("failure_summary", "")).strip()
+            if generated_artifacts or executed_commands or classification == "success":
+                line = f"- {task_id}: metric={metric}"
+                if summary:
+                    line += f" | {summary}"
+                progress_lines.append(line)
+            else:
+                line = f"- failed {task_id}: {classification or 'unknown_failure'}"
+                if failure_summary:
+                    line += f" | {failure_summary}"
+                failure_lines.append(line)
+        lines = progress_lines + failure_lines
         return self.token_budget.trim_to_budget("\n".join(lines), layer_budget=1200)

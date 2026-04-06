@@ -76,19 +76,25 @@ class VerificationPipeline:
     def _substantive_artifact_check(self, payload: dict[str, Any]) -> dict[str, Any]:
         generated_artifacts = payload.get("generated_artifacts", [])
         executed_commands = payload.get("executed_commands", [])
+        command_results = payload.get("command_results", [])
         selected_experiment = payload.get("selected_experiment")
         code_path = str(payload.get("code_path", "")).strip()
         has_generated_artifacts = isinstance(generated_artifacts, list) and bool(generated_artifacts)
+        has_successful_commands = (
+            isinstance(command_results, list)
+            and any(int(item.get("returncode", 1)) == 0 for item in command_results if isinstance(item, dict))
+        )
         has_executed_commands = isinstance(executed_commands, list) and bool(executed_commands)
         has_selected_experiment = isinstance(selected_experiment, dict) and bool(selected_experiment)
         has_code_path = bool(code_path)
-        passed = has_generated_artifacts or has_executed_commands or has_selected_experiment or has_code_path
+        passed = has_generated_artifacts or has_successful_commands or has_selected_experiment or has_code_path
         return {
             "name": "substantive_artifacts",
             "passed": passed,
             "evidence": [
                 f"generated_artifacts={len(generated_artifacts) if isinstance(generated_artifacts, list) else 0}",
                 f"executed_commands={len(executed_commands) if isinstance(executed_commands, list) else 0}",
+                f"successful_commands={sum(1 for item in command_results if isinstance(item, dict) and int(item.get('returncode', 1)) == 0) if isinstance(command_results, list) else 0}",
                 f"has_selected_experiment={has_selected_experiment}",
                 f"has_code_path={has_code_path}",
             ],
