@@ -241,7 +241,10 @@ class MetaHarnessLoop:
                 )
                 stubborn_failure = self._repeated_failure_message(repeated_failure_counts)
                 if stubborn_failure:
-                    redirect_message += f" Avoid repeating failure pattern: {stubborn_failure}."
+                    redirect_message += (
+                        f" Avoid repeating failure pattern: {stubborn_failure}. "
+                        "First diagnose the root cause from the recorded stderr, then propose a repaired or alternate branch."
+                    )
                 self.filesystem.write_json(
                     run_dir / "escalation_report.json",
                     {
@@ -381,6 +384,8 @@ class MetaHarnessLoop:
                         "failure_type": exc.error_class,
                         "failure_summary": str(exc),
                         "failed_command": "",
+                        "failure_signature": exc.error_class,
+                        "debug_focus": self._debug_focus(project_dir, run_n + 1),
                         "citations": [],
                         "agent_runtime": {
                             "provider": None,
@@ -471,6 +476,8 @@ class MetaHarnessLoop:
                 "failure_type": "",
                 "failure_summary": "",
                 "failed_command": "",
+                "failure_signature": "",
+                "debug_focus": self._debug_focus(project_dir, run_n + 1),
                 "citations": agent_result.get("citations", []),
                 "agent_runtime": {
                     "provider": agent_result.get("provider"),
@@ -501,6 +508,8 @@ class MetaHarnessLoop:
                 "failure_type": failure_type,
                 "failure_summary": failure_summary,
                 "failed_command": "",
+                "failure_signature": failure_type,
+                "debug_focus": self._debug_focus(project_dir, run_n + 1),
                 "citations": agent_result.get("citations", []),
                 "agent_runtime": {
                     "provider": agent_result.get("provider"),
@@ -523,6 +532,7 @@ class MetaHarnessLoop:
                 "model": agent_result.get("model"),
                 "attempted_models": agent_result.get("attempted_models", []),
                 "fallback_used": agent_result.get("fallback_used", False),
+                "debug_focus": self._debug_focus(project_dir, run_n),
             },
             "result": artifact_payload,
         }
@@ -581,6 +591,8 @@ class MetaHarnessLoop:
             "failure_type": failure_type,
             "failure_summary": failure_summary,
             "failed_command": str(last_failure.get("command", "")) if last_failure else "",
+            "failure_signature": str(last_failure.get("failure_signature", "")) if last_failure else "",
+            "debug_focus": self._debug_focus(project_dir, run_n + 1),
             "citations": agent_result.get("citations", []),
             "agent_runtime": {
                 "provider": agent_result.get("provider"),
@@ -661,6 +673,8 @@ class MetaHarnessLoop:
                         "stderr_path": str(stderr_path),
                         "failure_type": "command_failure" if process.returncode != 0 else "",
                         "failure_summary": "command returned non-zero exit status" if process.returncode != 0 else "",
+                        "stderr_excerpt": process.stderr.strip()[:400],
+                        "failure_signature": self._stderr_signature(process.stderr) if process.returncode != 0 else "",
                     }
                 )
                 if process.returncode != 0:
@@ -676,6 +690,8 @@ class MetaHarnessLoop:
                         "stderr_path": str(stderr_path),
                         "failure_type": "command_not_found",
                         "failure_summary": "executable or script was not found",
+                        "stderr_excerpt": "command not found",
+                        "failure_signature": "command_not_found",
                     }
                 )
                 break
@@ -691,6 +707,8 @@ class MetaHarnessLoop:
                         "stderr_path": str(stderr_path),
                         "failure_type": "command_timeout",
                         "failure_summary": "command exceeded timeout",
+                        "stderr_excerpt": (exc.stderr or "command timed out")[:400],
+                        "failure_signature": "command_timeout",
                     }
                 )
                 break
@@ -757,6 +775,8 @@ class MetaHarnessLoop:
                 payload["classification"] = result.get("classification", "")
                 payload["failure_type"] = result.get("failure_type", "")
                 payload["failure_summary"] = result.get("failure_summary", "")
+                payload["failed_command"] = result.get("failed_command", "")
+                payload["debug_focus"] = result.get("debug_focus", "")
             if verification_path.exists():
                 verification = self.filesystem.read_json(verification_path)
                 failed_checks = [
@@ -770,6 +790,7 @@ class MetaHarnessLoop:
         return {
             "prior_runs": prior_runs,
             "verification_failures": verification_failures,
+            "debug_focus": self._debug_focus(project_dir, run_n),
         }
 
     def _build_run_status(
@@ -800,9 +821,10 @@ class MetaHarnessLoop:
         classification = str(result.get("classification", "")).strip()
         failure_type = str(result.get("failure_type", "")).strip()
         failed_command = str(result.get("failed_command", "")).strip()
+        failure_signature = str(result.get("failure_signature", "")).strip()
         if not classification or classification == "success":
             return {}
-        key = "|".join(part for part in (classification, failure_type, failed_command) if part)
+        key = "|".join(part for part in (classification, failure_type, failure_signature or failed_command) if part)
         updated = dict(counters)
         updated[key] = updated.get(key, 0) + 1
         return updated
@@ -818,6 +840,36 @@ class MetaHarnessLoop:
     def _next_action_requires_verified_work(self, next_action: str) -> bool:
         lowered = next_action.lower()
         return any(token in lowered for token in ("publish", "publication", "submit", "finalize", "journal"))
+
+    def _stderr_signature(self, stderr: str) -> str:
+        lowered = stderr.strip().lower()
+        if not lowered:
+            return ""
+        for line in lowered.splitlines():
+            line = line.strip()
+            if line:
+                return line[:160]
+        return lowered[:160]
+
+    def _debug_focus(self, project_dir: Path, run_n: int) -> str:
+        signatures: dict[str, int] = {}
+        for prior_run in range(1, run_n):
+            result_path = project_dir / "runs" / str(prior_run) / "result.json"
+            if not result_path.exists():
+                continue
+            result = self.filesystem.read_json(result_path)
+            if str(result.get("classification", "")) != "command_failure":
+                continue
+            signature = str(result.get("failure_signature", "") or result.get("failure_summary", "")).strip()
+            if not signature:
+                continue
+            signatures[signature] = signatures.get(signature, 0) + 1
+        if not signatures:
+            return ""
+        signature, count = max(signatures.items(), key=lambda item: item[1])
+        if count < 2:
+            return ""
+        return f"Repeated failure signature ({count}x): {signature}"
 
     def _run_adversarial_check(self, outputs: dict[str, Any], criteria: list[str]):
         import asyncio

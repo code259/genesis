@@ -82,7 +82,11 @@ class VerificationPipeline:
         has_generated_artifacts = isinstance(generated_artifacts, list) and bool(generated_artifacts)
         has_successful_commands = (
             isinstance(command_results, list)
-            and any(int(item.get("returncode", 1)) == 0 for item in command_results if isinstance(item, dict))
+            and any(
+                int(item.get("returncode", 1)) == 0 and not self._is_setup_command(str(item.get("command", "")))
+                for item in command_results
+                if isinstance(item, dict)
+            )
         )
         has_executed_commands = isinstance(executed_commands, list) and bool(executed_commands)
         has_selected_experiment = isinstance(selected_experiment, dict) and bool(selected_experiment)
@@ -95,10 +99,15 @@ class VerificationPipeline:
                 f"generated_artifacts={len(generated_artifacts) if isinstance(generated_artifacts, list) else 0}",
                 f"executed_commands={len(executed_commands) if isinstance(executed_commands, list) else 0}",
                 f"successful_commands={sum(1 for item in command_results if isinstance(item, dict) and int(item.get('returncode', 1)) == 0) if isinstance(command_results, list) else 0}",
+                f"task_relevant_successful_commands={sum(1 for item in command_results if isinstance(item, dict) and int(item.get('returncode', 1)) == 0 and not self._is_setup_command(str(item.get('command', '')))) if isinstance(command_results, list) else 0}",
                 f"has_selected_experiment={has_selected_experiment}",
                 f"has_code_path={has_code_path}",
             ],
         }
+
+    def _is_setup_command(self, command: str) -> bool:
+        lowered = command.strip().lower()
+        return lowered.startswith("pip install") or lowered.startswith("python -m pip install")
 
     def _citation_check(self, outputs_dir: Path) -> list[dict[str, Any]]:
         paper_dir = outputs_dir.parent / "paper"

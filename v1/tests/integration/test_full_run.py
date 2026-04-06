@@ -510,3 +510,79 @@ def test_failed_command_attempt_does_not_pass_verification(tmp_path, monkeypatch
     substantive = next(check for check in verification["checks"] if check["name"] == "substantive_artifacts")
     assert substantive["passed"] is False
     assert verification["passed"] is False
+
+
+def test_repeated_command_failure_populates_debug_focus(tmp_path, monkeypatch):
+    def _generate(self, **kwargs):
+        instruction = str(kwargs.get("instruction", ""))
+        if "Produce a bounded research task DAG" in instruction:
+            return {
+                "summary": "Generated task tree.",
+                "artifact_plan": [],
+                "command_plan": [],
+                "experiment_plan": [],
+                "citations": [],
+                "next_action": "continue",
+                "provider": "test",
+                "model": "fake-model",
+                "primary_model": "fake-model",
+                "attempted_models": ["fake-model"],
+                "fallback_used": False,
+                "task_tree": [],
+            }
+        return {
+            "summary": "Retry same bad import.",
+            "artifact_plan": [],
+            "command_plan": ["python -c \"from astroquery.mast import MastQuery\""],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+            "primary_model": "fake-model",
+            "attempted_models": ["fake-model"],
+            "fallback_used": False,
+        }
+
+    monkeypatch.setattr(CodingAgentRuntime, "generate_task", _generate)
+
+    class _Report:
+        def __init__(self):
+            self.acceptance_ratio = 0.0
+            self.stopping_decision = StoppingDecision(False, ["continue iteration"])
+
+        def to_dict(self):
+            return {
+                "acceptance_ratio": self.acceptance_ratio,
+                "claim_flags": ["IMPLICIT_ASSUMPTION:test"],
+                "literature_flags": [],
+                "formal_checks": [],
+                "grounded_claims": 0,
+                "total_claims": 1,
+                "stopping_decision": self.stopping_decision.to_dict(),
+            }
+
+    monkeypatch.setattr("genesis.harness.loop.MetaHarnessLoop._run_adversarial_check", lambda self, outputs, criteria: _Report())
+
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(
+        json.dumps(
+            {
+                "research_question": "Repeated failure debug focus",
+                "domain": "general",
+                "success_criteria": ["Repeated failure debug focus"],
+                "oracle_hints": [],
+                "compute_budget": "local_cpu",
+                "time_budget_hours": 1,
+                "domain_knowledge_model": "none",
+                "output_dir": str(tmp_path / "projects"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(main, ["run", "--project-id", "debugfocus01", "--spec", str(spec_path), "--max-runs", "3"])
+    assert result.exit_code == 0, result.output
+    third = json.loads((tmp_path / "projects" / "debugfocus01" / "runs" / "3" / "result.json").read_text(encoding="utf-8"))
+    assert "repeated failure signature" in third["debug_focus"].lower()
