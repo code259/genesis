@@ -141,7 +141,10 @@ def test_oracle_resolver_and_ideation_orchestrator(tmp_path):
         pollination=PollinationSearch(manifold),
         low_density=LowDensityExplorer(manifold),
     )
-    ideas = orchestrator.run("optimizer warmup stability", n_failed_iterations=5)
+    ideation_result = orchestrator.run_with_status("optimizer warmup stability", n_failed_iterations=5)
+    ideas = ideation_result.ideas
+    assert ideation_result.status == "enabled_with_candidates"
+    assert "greedy" in ideation_result.health.ready_modes
     assert ideas
     assert ideas[0].score.composite_score >= ideas[-1].score.composite_score
     assert any(idea.idea.source == "pollination" for idea in ideas)
@@ -191,3 +194,10 @@ def test_manifold_chromadb_round_trips_structured_metadata(tmp_path):
     papers = manifold.all_papers()
     assert papers[0]["authors"] == [{"name": "A. Researcher"}]
     assert papers[0]["citations"] == ["paper-2"]
+
+
+def test_manifold_health_reports_missing_prereqs(tmp_path):
+    manifold = ManifoldIndex(tmp_path / "manifold")
+    health = manifold.assess_health()
+    assert health.status == "empty"
+    assert "papers_missing" in health.reasons

@@ -238,7 +238,7 @@ def test_provider_runtime_accepts_legacy_providers_key(tmp_path):
     assert runtime.categories["sisyphus"].max_tokens == 1024
 
 
-def test_live_runtime_config_uses_gemma4():
-    config_path = "/Users/nikhilmaturi/Files/Projects/genesis/v1/.opencode/oh-my-openagent.jsonc"
+def test_live_runtime_config_prefers_ollama_cloud():
+    config_path = "/Users/nikhilmaturi/Files/Projects/genesis/v1/configs/runtime_omo.jsonc"
     runtime = CodingAgentRuntime(config_path, session=_Session())
-    assert runtime.categories["sisyphus"].model == "gemma4:e4b"
+    assert runtime.categories["sisyphus"].model == "ollama-cloud/glm-5:cloud"
