@@ -659,13 +659,13 @@ class MetaHarnessLoop:
             completion_reason=result_summary,
             project_status=project_status,
         )
-        self._update_causal_dag(project_dir / "causal_dag.json", project_id, config.domain, verified_experiments)
-        self.taste_persistence.save_after_project(project_id, taste_model)
         verified_experiments = [
             experiment
             for experiment in ledger.get_pareto_frontier()
             if str(experiment.get("status", "")).lower() in {"keep", "success"}
         ]
+        self._update_causal_dag(project_dir / "causal_dag.json", project_id, config.domain, verified_experiments)
+        self.taste_persistence.save_after_project(project_id, taste_model)
         self.taste_persistence.merge_project_data(project_id, verified_experiments)
         self.filesystem.write_project_state(
             project_id,
