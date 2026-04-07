@@ -93,3 +93,59 @@ def test_paper_synthesizer_and_domain_registry(tmp_path, monkeypatch):
     provider = DomainKnowledgeRegistry(cache_root=tmp_path / "cache").get_provider("astrophysics")
     summary = provider.initialize({"research_question": "How does this behave?"})
     assert summary
+
+
+def test_paper_synthesizer_escapes_special_characters_and_uses_richer_fallback(tmp_path):
+    project_root = tmp_path / "projects"
+    run_dir = project_root / "demo" / "runs" / "1"
+    paper_dir = project_root / "demo" / "outputs" / "paper"
+    knowledge_dir = project_root / "demo" / "knowledge"
+    run_dir.mkdir(parents=True)
+    paper_dir.mkdir(parents=True)
+    knowledge_dir.mkdir(parents=True)
+    (project_root / "demo" / "spec.json").write_text(
+        json.dumps({"research_question": "Effect of x & y on z_%", "domain": "general"}),
+        encoding="utf-8",
+    )
+    (knowledge_dir / "domain_context.md").write_text("context with 100% detail & constraints", encoding="utf-8")
+    (run_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-1",
+                "summary": "Measured x & y with z_% outcome.",
+                "primary_metric": 0.9,
+                "citations": [],
+                "generated_artifacts": ["artifact.txt"],
+                "agent_runtime": {"provider": "test", "model": "fake"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "verification_report.json").write_text(json.dumps({"passed": True}), encoding="utf-8")
+    result = PaperSynthesizer(project_root).synthesize("demo")
+    tex = Path(result["latex_path"]).read_text(encoding="utf-8")
+    assert r"\&" in tex
+    assert r"\%" in tex
+    assert "Domain context used during synthesis" in tex
+
+
+def test_paper_synthesizer_uses_section_runtime(tmp_path):
+    class _Runtime:
+        def __init__(self):
+            self.calls = []
+
+        def generate_task(self, **kwargs):
+            self.calls.append(kwargs["context"]["section"])
+            return {"summary": f"{kwargs['context']['section']} section", "paper_body": f"{kwargs['context']['section']} body"}
+
+    project_root = tmp_path / "projects"
+    run_dir = project_root / "demo" / "runs" / "1"
+    paper_dir = project_root / "demo" / "outputs" / "paper"
+    run_dir.mkdir(parents=True)
+    paper_dir.mkdir(parents=True)
+    (project_root / "demo" / "spec.json").write_text(json.dumps({"research_question": "How does this behave?", "domain": "general"}), encoding="utf-8")
+    (run_dir / "result.json").write_text(json.dumps({"task_id": "task-1", "summary": "summary", "primary_metric": 0.9, "citations": []}), encoding="utf-8")
+    (run_dir / "verification_report.json").write_text(json.dumps({"passed": True}), encoding="utf-8")
+    runtime = _Runtime()
+    PaperSynthesizer(project_root, runtime=runtime).synthesize("demo")
+    assert runtime.calls == ["abstract", "introduction", "methods", "results", "discussion"]

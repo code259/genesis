@@ -124,68 +124,65 @@ class PaperSynthesizer:
 
         verified_runs = [run for run in runs if run["verification"].get("passed")]
         if not final:
-            source_runs = verified_runs
+            source_runs = runs
         else:
             source_runs = verified_runs or runs
         top_metric = max((run["result"].get("primary_metric", 0.0) for run in source_runs), default=0.0)
+        spec = json.loads((project_dir / "spec.json").read_text(encoding="utf-8")) if (project_dir / "spec.json").exists() else {}
+        research_question = str(spec.get("research_question", "")).strip()
+        domain = str(spec.get("domain", "general")).strip()
+        domain_context = (project_dir / "knowledge" / "domain_context.md").read_text(encoding="utf-8") if (project_dir / "knowledge" / "domain_context.md").exists() else ""
         if final:
-            abstract = (
-                f"Genesis completed {len(runs)} research iterations, with {len(verified_runs)} verification-passing runs. "
-                f"The best observed primary metric was {top_metric:.4f}."
+            abstract = self._escape_latex(
+                f"This report addresses the question '{research_question or project_dir.name}' using {len(source_runs)} synthesized task outputs. "
+                f"{len(verified_runs)} runs passed verification, and the strongest observed primary metric was {top_metric:.4f}."
             )
-            introduction = "This report summarizes the current Genesis v1 project state and emphasizes verification-passing artifacts."
+            introduction = self._escape_latex(
+                f"The project investigates '{research_question or project_dir.name}' in the {domain or 'general'} domain. "
+                "This paper emphasizes verified artifacts, retrieved context, and reproducible outputs rather than raw execution logs."
+            )
         else:
-            abstract = (
-                f"Interim Genesis report: {project_status}. "
+            abstract = self._escape_latex(
+                f"Interim Genesis report for '{research_question or project_dir.name}'. "
                 f"{len(verified_runs)} of {len(runs)} runs passed verification. "
                 f"Current completion reason: {completion_reason or 'work remains.'}"
             )
-            introduction = "This is an interim project report generated because the run ended before stopping criteria were satisfied."
-        methods = "\n".join(
-            self._escape_latex(
-                f"Run {index}: task={run['result'].get('task_id', 'unknown')}, provider={run['result'].get('agent_runtime', {}).get('provider', 'n/a')}, model={run['result'].get('agent_runtime', {}).get('model', 'n/a')}."
+            introduction = self._escape_latex(
+                "This is an interim scientific progress report. It summarizes current evidence, partial outputs, and outstanding blockers without claiming final completion."
             )
-            for index, run in enumerate(source_runs, start=1)
-        ) or "No verified substantive runs were available for this report."
-        results_text = "\n\n".join(
-            f"\\textbf{{Run {index}}}: {self._escape_latex(run['result'].get('summary', 'n/a'))} Primary metric={run['result'].get('primary_metric', 0.0)}. Verification passed={run['verification'].get('passed', False)}."
-            for index, run in enumerate(source_runs, start=1)
-        ) or "No verified substantive results were available at synthesis time."
+        methods = self._build_methods_text(source_runs, domain_context)
+        results_text = self._build_results_text(source_runs)
         if not final:
-            discussion = (
+            discussion = self._escape_latex(
                 f"The project did not reach stopping criteria. Completion reason: {completion_reason or 'incomplete'}. "
-                "This report is for progress inspection only and should not be treated as a final paper."
+                "Interpret these results as partial evidence and not as a final scientific conclusion."
             )
         else:
-            discussion = (
+            discussion = self._escape_latex(
                 "No runs passed verification; follow-up work should prioritize fixing verification failures."
                 if not verified_runs
-                else f"{len(verified_runs)} of {len(runs)} runs passed verification. Future work should expand the verified result set."
+                else f"{len(verified_runs)} of {len(runs)} runs passed verification. Future work should expand the verified result set and strengthen the strongest verified result."
             )
 
         if self.runtime is not None and source_runs:
             try:
-                spec = json.loads((project_dir / "spec.json").read_text(encoding="utf-8")) if (project_dir / "spec.json").exists() else {}
-                domain_context = (project_dir / "knowledge" / "domain_context.md").read_text(encoding="utf-8") if (project_dir / "knowledge" / "domain_context.md").exists() else ""
                 top_papers = self._collect_reference_metadata(project_dir, source_runs, CitationsAgent(project_dir / "knowledge" / "citations_cache.json"))[:5]
-                payload = self.runtime.generate_task(
-                    category="genesis-paper",
-                    instruction="Draft a concise scientific paper summary from verified Genesis run artifacts.",
-                    context={
-                        "project_id": project_dir.name,
-                        "research_question": spec.get("research_question", ""),
-                        "domain": spec.get("domain", ""),
-                        "domain_context": domain_context,
-                        "results": [run["result"] for run in source_runs],
-                        "verification": [run["verification"] for run in source_runs],
-                        "top_references": top_papers,
-                    },
-                    budget={"sections": ["abstract", "results"]},
-                )
-                abstract = self._escape_latex(str(payload.get("summary") or abstract))
-                generated_body = str(payload.get("paper_body") or "").strip()
-                if generated_body:
-                    results_text = self._escape_latex(generated_body)
+                section_context = {
+                    "project_id": project_dir.name,
+                    "research_question": research_question,
+                    "domain": domain,
+                    "domain_context": domain_context,
+                    "results": [run["result"] for run in source_runs],
+                    "verification": [run["verification"] for run in source_runs],
+                    "top_references": top_papers,
+                    "report_mode": "final" if final else "interim",
+                    "completion_reason": completion_reason,
+                }
+                abstract = self._generate_section("abstract", abstract, section_context)
+                introduction = self._generate_section("introduction", introduction, section_context)
+                methods = self._generate_section("methods", methods, section_context)
+                results_text = self._generate_section("results", results_text, section_context)
+                discussion = self._generate_section("discussion", discussion, section_context)
             except ProviderRuntimeError:
                 pass
 
@@ -208,6 +205,50 @@ class PaperSynthesizer:
             ],
             "runs": source_runs,
         }
+
+    def _build_methods_text(self, runs: list[dict[str, Any]], domain_context: str) -> str:
+        run_lines = []
+        for index, run in enumerate(runs, start=1):
+            result = run["result"]
+            artifacts = result.get("generated_artifacts", [])
+            commands = result.get("executed_commands", [])
+            line = (
+                f"Run {index} focused on task {result.get('task_id', 'unknown')} using provider "
+                f"{result.get('agent_runtime', {}).get('provider', 'n/a')} and model "
+                f"{result.get('agent_runtime', {}).get('model', 'n/a')}."
+            )
+            if artifacts:
+                line += f" It produced {len(artifacts)} substantive artifacts."
+            if commands:
+                line += f" It executed {len(commands)} commands."
+            run_lines.append(self._escape_latex(line))
+        if domain_context:
+            run_lines.append(self._escape_latex(f"Domain context used during synthesis: {domain_context[:400]}"))
+        return "\n".join(run_lines) or "No substantive methods were available."
+
+    def _build_results_text(self, runs: list[dict[str, Any]]) -> str:
+        blocks = []
+        for index, run in enumerate(runs, start=1):
+            result = run["result"]
+            verification = run["verification"]
+            blocks.append(
+                self._escape_latex(
+                    f"Run {index} summary: {result.get('summary', 'n/a')} "
+                    f"Primary metric={result.get('primary_metric', 0.0)}. "
+                    f"Verification passed={verification.get('passed', False)}."
+                )
+            )
+        return "\n\n".join(blocks) or "No substantive results were available at synthesis time."
+
+    def _generate_section(self, section: str, fallback: str, context: dict[str, Any]) -> str:
+        payload = self.runtime.generate_task(
+            category="genesis-paper",
+            instruction=f"Write the {section} section as plain scientific prose. Do not emit LaTeX commands or markdown.",
+            context={**context, "section": section},
+            budget={"sections": [section]},
+        )
+        body = str(payload.get("paper_body") or payload.get("summary") or "").strip()
+        return self._escape_latex(body or fallback)
 
     def _collect_reference_metadata(self, project_dir: Path, runs: list[dict[str, Any]], citations: CitationsAgent) -> list[dict[str, object]]:
         references: list[dict[str, object]] = []
