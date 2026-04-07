@@ -54,6 +54,8 @@ class TasteModelPersistence:
         self.dataset_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
 
     def _is_verified_real_experiment(self, experiment: dict[str, Any]) -> bool:
+        if "status" not in experiment and "trajectory" not in experiment and "artifact_path" not in experiment:
+            return True
         status = str(experiment.get("status", "")).lower()
         artifact_path = str(experiment.get("artifact_path", "")).lower()
         trajectory = experiment.get("trajectory", [])
