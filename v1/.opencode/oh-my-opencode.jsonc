@@ -1,0 +1,22 @@
+{
+  "agents": {
+    "build": {
+      "model": "ollama-cloud/glm-5:cloud",
+      "temperature": 0.2,
+      "max_tokens": 4000
+    },
+    "explore": {
+      "model": "groq/llama-3.3-70b-versatile",
+      "temperature": 0.2,
+      "max_tokens": 2000
+    }
+  },
+  "categories": {
+    "deep": {
+      "model": "ollama-cloud/glm-5:cloud"
+    },
+    "quick": {
+      "model": "groq/llama-3.3-70b-versatile"
+    }
+  }
+}

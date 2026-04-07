@@ -1,58 +1,29 @@
 {
-  "categories": {
+  "agents": {
     "sisyphus": {
-      "provider": "ollama",
-      "model": "gemma4:e4b",
-      "fallbacks": ["llama3.2:3b"],
+      "model": "ollama/glm-5:cloud",
       "temperature": 0.2,
       "max_tokens": 4000
     },
-    "genesis-adversarial": {
-      "provider": "ollama",
-      "model": "gemma4:e4b",
-      "fallbacks": ["llama3.2:3b"],
-      "temperature": 0.2,
+    "oracle": {
+      "model": "ollama/glm-5:cloud",
+      "temperature": 0,
       "max_tokens": 2500
     },
-    "genesis-ideation": {
-      "provider": "ollama",
-      "model": "gemma4:e4b",
-      "fallbacks": ["llama3.2:3b"],
-      "temperature": 0.8,
-      "max_tokens": 3000
-    },
-    "genesis-oracle": {
-      "provider": "ollama",
-      "model": "gemma4:e4b",
-      "fallbacks": ["llama3.2:3b"],
-      "temperature": 0.0,
-      "max_tokens": 2500
-    },
-    "genesis-citations": {
-      "provider": "ollama",
-      "model": "gemma4:e4b",
-      "fallbacks": ["llama3.2:3b"],
-      "temperature": 0.1,
-      "max_tokens": 2500
-    },
-    "genesis-plotting": {
-      "provider": "ollama",
-      "model": "gemma4:e4b",
-      "fallbacks": ["llama3.2:3b"],
-      "temperature": 0.4,
-      "max_tokens": 2500
-    },
-    "genesis-paper": {
-      "provider": "ollama",
-      "model": "gemma4:e4b",
-      "fallbacks": ["llama3.2:3b"],
+    "document-writer": {
+      "model": "ollama/glm-5:cloud",
       "temperature": 0.3,
       "max_tokens": 3500
+    },
+    "explore": {
+      "model": "ollama/glm-5:cloud",
+      "temperature": 0.2,
+      "max_tokens": 2000
+    },
+    "librarian": {
+      "model": "ollama/glm-5:cloud",
+      "temperature": 0.2,
+      "max_tokens": 2000
     }
-  },
-  "permissions": {
-    "allow_shell": true,
-    "allow_filesystem": true,
-    "allow_network": true
   }
 }
