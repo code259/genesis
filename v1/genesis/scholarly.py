@@ -13,6 +13,8 @@ import requests
 
 
 class ScholarlyClient:
+    MAX_CACHE_ENTRIES = 500
+
     def __init__(
         self,
         *,
@@ -107,7 +109,7 @@ class ScholarlyClient:
             "https://export.arxiv.org/api/query?"
             + urllib.parse.urlencode(
                 {
-                    "search_query": f"all:{query}",
+                    "search_query": query if any(prefix in query for prefix in ("cat:", "ti:", "abs:", "au:")) else f"all:{query}",
                     "start": 0,
                     "max_results": limit,
                 }
@@ -207,6 +209,10 @@ class ScholarlyClient:
     def _set_cache(self, key: str, value: Any) -> None:
         payload = self._load_cache()
         payload[key] = value
+        if len(payload) > self.MAX_CACHE_ENTRIES:
+            oldest_keys = list(payload.keys())[: len(payload) - self.MAX_CACHE_ENTRIES]
+            for old_key in oldest_keys:
+                payload.pop(old_key, None)
         self._save_cache(payload)
 
     def _cache_key(self, prefix: str, payload: dict[str, Any]) -> str:

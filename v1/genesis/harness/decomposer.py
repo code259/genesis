@@ -32,10 +32,21 @@ class TaskDecomposer:
                 pass
         tasks: list[TaskNode] = []
         root_id = self._task_id(config.research_question, "root")
+        literature_description = f"Survey prior work relevant to: {config.research_question}"
+        experiment_description = f"Run controlled experiments for: {config.research_question}"
+        if config.domain == "astrophysics":
+            literature_description = f"Survey astrophysics literature and datasets relevant to: {config.research_question}"
+            experiment_description = f"Download, preprocess, and analyze astrophysics data for: {config.research_question}"
+        elif config.domain == "ml_efficiency":
+            literature_description = f"Survey prior ML systems and optimization work relevant to: {config.research_question}"
+            experiment_description = f"Run controlled ML efficiency experiments for: {config.research_question}"
+        elif config.domain == "general":
+            literature_description = f"Survey prior work and methods relevant to: {config.research_question}"
+            experiment_description = f"Run task-grounded experiments or artifact generation for: {config.research_question}"
 
         literature = self._task(
             config,
-            description=f"Survey prior work relevant to: {config.research_question}",
+            description=literature_description,
             suffix="literature",
             dependencies=[],
             success_metric="produce grounded literature map",
@@ -51,11 +62,11 @@ class TaskDecomposer:
         )
         experiment = self._task(
             config,
-            description=f"Run controlled experiments for: {config.research_question}",
+            description=experiment_description,
             suffix="experiments",
             dependencies=[literature.task_id],
             success_metric=config.success_criteria[0] if config.success_criteria else "improve primary metric",
-            requires_ml_optimizer=config.domain == "ml_efficiency",
+            requires_ml_optimizer=config.domain in {"ml_efficiency", "astrophysics"},
         )
         verification = self._task(
             config,

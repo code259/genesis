@@ -8,7 +8,9 @@ from genesis.modules.ideation.pollination import PollinationSearch
 from genesis.modules.optimizer.oracle_resolver import OracleResolver
 from genesis.modules.optimizer.parallel import ParallelExperimentManager
 from genesis.modules.optimizer.proposer import ExperimentProposer
+from genesis.modules.optimizer.runner import ExperimentRunner
 from genesis.storage.ledger import ExperimentLedger
+from genesis.storage.causal_dag import CausalDAG
 from genesis.storage.manifold import ManifoldIndex
 from genesis.taste.features import ExperimentFeatureExtractor
 from genesis.taste.gp_model import TasteGP
@@ -34,18 +36,13 @@ def test_parallel_experiment_manager_runs_and_preserves_order(tmp_path):
             {
                 "experiment_id": "exp1",
                 "task_id": "task",
-                "task_type": "ml_efficiency",
-                "learning_rate": 0.12,
-                "warmup_ratio": 0.25,
-                "steps": 8,
+                "command": ["python3", "-c", "import json; open('result.json','w').write(json.dumps({'primary_metric':0.6,'trajectory':[0.2,0.4,0.6]}))"],
                 "expected_trajectory": [0.2, 0.4, 0.6],
             },
             {
                 "experiment_id": "exp2",
                 "task_id": "task",
-                "task_type": "analysis",
-                "scale": 0.9,
-                "steps": 6,
+                "command": ["python3", "-c", "import json; open('result.json','w').write(json.dumps({'primary_metric':0.3,'trajectory':[0.1,0.2,0.3]}))"],
                 "expected_trajectory": [0.1, 0.2, 0.3],
             },
         ],
@@ -54,6 +51,13 @@ def test_parallel_experiment_manager_runs_and_preserves_order(tmp_path):
     assert [result.experiment_id for result in results] == ["exp1", "exp2"]
     assert all(result.trajectory for result in results)
     assert all(Path(result.artifact_path).exists() for result in results)
+
+
+def test_experiment_runner_requires_real_command(tmp_path):
+    runner = ExperimentRunner(tmp_path / "sandboxes")
+    result = runner.run("task", {"experiment_id": "exp1", "expected_trajectory": [0.1, 0.2]})
+    assert result.status == "crash"
+    assert "did not provide a runnable command" in Path(result.artifact_path).read_text(encoding="utf-8")
 
 
 def test_experiment_proposer_uses_ledger_history(tmp_path):
@@ -75,10 +79,12 @@ def test_experiment_proposer_uses_ledger_history(tmp_path):
         ),
         timestamp="2026-04-04T00:00:00Z",
     )
-    proposals = ExperimentProposer().propose_next("task-1", n=2, ledger=ledger)
+    dag = CausalDAG(tmp_path / "dag.json")
+    dag.add_edge("learning_rate", "metric", effect_size=0.2, confidence=0.9, experiment_ids=["exp-1"], domain="ml_efficiency")
+    proposals = ExperimentProposer().propose_next("task-1", n=2, ledger=ledger, causal_dag=dag, domain="ml_efficiency")
     assert len(proposals) == 2
     assert proposals[0].expected_metric >= 0.72
-    assert "stabilization" in proposals[0].description.lower()
+    assert "causal" in proposals[0].description.lower() or "stabilization" in proposals[0].description.lower()
 
 
 def test_feature_extractor_gp_and_persistence_shape(tmp_path):

@@ -142,11 +142,13 @@ class PaperSynthesizer:
             )
             introduction = "This is an interim project report generated because the run ended before stopping criteria were satisfied."
         methods = "\n".join(
-            f"Run {index}: task={run['result'].get('task_id', 'unknown')}, provider={run['result'].get('agent_runtime', {}).get('provider', 'n/a')}, model={run['result'].get('agent_runtime', {}).get('model', 'n/a')}."
+            self._escape_latex(
+                f"Run {index}: task={run['result'].get('task_id', 'unknown')}, provider={run['result'].get('agent_runtime', {}).get('provider', 'n/a')}, model={run['result'].get('agent_runtime', {}).get('model', 'n/a')}."
+            )
             for index, run in enumerate(source_runs, start=1)
         ) or "No verified substantive runs were available for this report."
         results_text = "\n\n".join(
-            f"\\textbf{{Run {index}}}: {run['result'].get('summary', 'n/a')} Primary metric={run['result'].get('primary_metric', 0.0)}. Verification passed={run['verification'].get('passed', False)}."
+            f"\\textbf{{Run {index}}}: {self._escape_latex(run['result'].get('summary', 'n/a'))} Primary metric={run['result'].get('primary_metric', 0.0)}. Verification passed={run['verification'].get('passed', False)}."
             for index, run in enumerate(source_runs, start=1)
         ) or "No verified substantive results were available at synthesis time."
         if not final:
@@ -163,16 +165,27 @@ class PaperSynthesizer:
 
         if self.runtime is not None and source_runs:
             try:
+                spec = json.loads((project_dir / "spec.json").read_text(encoding="utf-8")) if (project_dir / "spec.json").exists() else {}
+                domain_context = (project_dir / "knowledge" / "domain_context.md").read_text(encoding="utf-8") if (project_dir / "knowledge" / "domain_context.md").exists() else ""
+                top_papers = self._collect_reference_metadata(project_dir, source_runs, CitationsAgent(project_dir / "knowledge" / "citations_cache.json"))[:5]
                 payload = self.runtime.generate_task(
                     category="genesis-paper",
                     instruction="Draft a concise scientific paper summary from verified Genesis run artifacts.",
-                    context={"project_id": project_dir.name, "results": [run["result"] for run in source_runs]},
+                    context={
+                        "project_id": project_dir.name,
+                        "research_question": spec.get("research_question", ""),
+                        "domain": spec.get("domain", ""),
+                        "domain_context": domain_context,
+                        "results": [run["result"] for run in source_runs],
+                        "verification": [run["verification"] for run in source_runs],
+                        "top_references": top_papers,
+                    },
                     budget={"sections": ["abstract", "results"]},
                 )
-                abstract = str(payload.get("summary") or abstract)
+                abstract = self._escape_latex(str(payload.get("summary") or abstract))
                 generated_body = str(payload.get("paper_body") or "").strip()
                 if generated_body:
-                    results_text = generated_body
+                    results_text = self._escape_latex(generated_body)
             except ProviderRuntimeError:
                 pass
 
@@ -258,6 +271,24 @@ class PaperSynthesizer:
             "\\caption{Metric trajectory across the best available results.}\n"
             "\\end{figure}\n"
         )
+
+    def _escape_latex(self, text: str) -> str:
+        replacements = {
+            "\\": r"\textbackslash{}",
+            "&": r"\&",
+            "%": r"\%",
+            "$": r"\$",
+            "#": r"\#",
+            "_": r"\_",
+            "{": r"\{",
+            "}": r"\}",
+            "~": r"\textasciitilde{}",
+            "^": r"\textasciicircum{}",
+        }
+        escaped = str(text)
+        for source, target in replacements.items():
+            escaped = escaped.replace(source, target)
+        return escaped
 
     def _compile_latex(self, tex_path: Path) -> str:
         log_parts = []

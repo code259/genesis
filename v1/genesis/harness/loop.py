@@ -41,7 +41,7 @@ class MetaHarnessLoop:
     ADVERSARIAL_ITERATION_LIMIT = 3
     ESCALATION_RETRY_LIMIT = 2
     REPEATED_FAILURE_LIMIT = 3
-    STAGE_SEQUENCE = ["survey", "oracle", "execute", "verify"]
+    STAGE_SEQUENCE = ["survey", "oracle", "execute", "verify", "paper"]
 
     def __init__(
         self,
@@ -71,6 +71,27 @@ class MetaHarnessLoop:
 
     def run(self, project_id: str, config: ProjectConfig, max_runs: int = 50) -> ProjectResult:
         project_dir = self.filesystem.init_project(project_id, config.to_dict())
+        if (project_dir / "HALT.json").exists():
+            halted = self.filesystem.read_json(project_dir / "HALT.json")
+            self.filesystem.write_project_state(
+                project_id,
+                {
+                    "status": "halted",
+                    "run_count": self.filesystem.read_project_state(project_id).get("run_count", 0),
+                    "current_stage": self.filesystem.read_project_state(project_id).get("current_stage", "survey"),
+                    "last_run_status": {
+                        "run_n": self.filesystem.read_project_state(project_id).get("run_count", 0),
+                        "summary": str(halted.get("message", "project halted")),
+                    },
+                },
+            )
+            return ProjectResult(
+                project_id=project_id,
+                status="halted",
+                paper_path=None,
+                run_count=self.filesystem.read_project_state(project_id).get("run_count", 0),
+                summary=str(halted.get("message", "project halted")),
+            )
         health = self.agent_runtime.check_health(probe_models=False)
         self.filesystem.write_json(project_dir / "runtime_health.json", health)
         if not health.get("passed", False):
@@ -120,6 +141,7 @@ class MetaHarnessLoop:
         stopping_criteria_satisfied = False
         repeated_failure_counts: dict[str, int] = {}
         state = self.filesystem.read_project_state(project_id)
+        task_states = self._initialize_task_states(state.get("task_states"), decomposition)
         current_stage = str(state.get("current_stage") or self.STAGE_SEQUENCE[0])
         latest_execute_result: dict[str, Any] | None = None
 
@@ -139,7 +161,13 @@ class MetaHarnessLoop:
                 if intervention.get("type") == "REJECT":
                     failed_iterations += 1
                 self.filesystem.clear_human_intervention(project_id)
-            task_node = self._task_for_stage(decomposition, current_stage)
+            task_states = self._refresh_task_states(task_states, decomposition)
+            task_node = self._select_next_task(decomposition, task_states)
+            if task_node is None:
+                result_summary = "all task DAG nodes completed"
+                stopping_criteria_satisfied = True
+                break
+            current_stage = self._stage_for_task(task_node)
             budget_allocations = self.token_budget.allocate(
                 128000 if "cloud" in config.compute_budget.lower() or "groq" in config.compute_budget.lower() else 18000
             )
@@ -187,6 +215,14 @@ class MetaHarnessLoop:
             )
             self.filesystem.write_instruction(project_id, run_n, instruction)
             run_dir = self.filesystem.get_run_dir(project_id, run_n)
+            self._mark_task_state(
+                task_states,
+                task_node.task_id,
+                status="running",
+                run_n=run_n,
+                stage=current_stage,
+                blockers=[],
+            )
             if current_stage == "oracle":
                 oracle_source = self.oracle_generator.generate(config)
                 oracle_path.write_text(oracle_source, encoding="utf-8")
@@ -243,16 +279,32 @@ class MetaHarnessLoop:
                 if report.critical_blockers:
                     failed_iterations += 1
                     redirect_message = self._format_adversarial_blockers(report.critical_blockers)
+                    self._mark_task_state(
+                        task_states,
+                        task_node.task_id,
+                        status="blocked",
+                        run_n=run_n,
+                        stage=current_stage,
+                        blockers=report.critical_blockers,
+                    )
                 else:
-                    current_stage = self._next_stage(current_stage)
                     failed_iterations = 0
                     redirect_message = ""
+                    self._mark_task_state(
+                        task_states,
+                        task_node.task_id,
+                        status="completed",
+                        run_n=run_n,
+                        stage=current_stage,
+                        blockers=[],
+                    )
                 self.filesystem.write_project_state(
                     project_id,
                     {
                         "status": "running",
                         "run_count": run_n,
                         "current_stage": current_stage,
+                        "task_states": task_states,
                         "ideation_available": ideation_available,
                         "manifold_status": manifold_health.status,
                         "ready_ideation_modes": manifold_health.ready_modes,
@@ -306,12 +358,21 @@ class MetaHarnessLoop:
                 if self._check_stopping_criteria(report) and verification["passed"]:
                     result_summary = "stopping criteria satisfied"
                     stopping_criteria_satisfied = True
+                    self._mark_task_state(
+                        task_states,
+                        task_node.task_id,
+                        status="completed",
+                        run_n=run_n,
+                        stage=current_stage,
+                        blockers=[],
+                    )
                     self.filesystem.write_project_state(
                         project_id,
                         {
                             "status": "complete",
                             "run_count": run_n,
                             "current_stage": current_stage,
+                            "task_states": task_states,
                             "last_run_status": self._build_run_status(
                                 run_n=run_n,
                                 summary=result_summary,
@@ -323,15 +384,23 @@ class MetaHarnessLoop:
                     )
                     break
                 failed_iterations += 1
-                current_stage = "execute"
                 repeated_failure_counts = self._update_repeated_failures(repeated_failure_counts, result_payload)
                 escalation_attempts = max(0, failed_iterations - self.ADVERSARIAL_ITERATION_LIMIT)
+                self._mark_task_state(
+                    task_states,
+                    task_node.task_id,
+                    status="blocked",
+                    run_n=run_n,
+                    stage=current_stage,
+                    blockers=report.critical_blockers or ["verification_failed"],
+                )
                 self.filesystem.write_project_state(
                     project_id,
                     {
                         "status": "running",
                         "run_count": run_n,
                         "current_stage": current_stage,
+                        "task_states": task_states,
                         "ideation_available": ideation_available,
                         "manifold_status": manifold_health.status,
                         "ready_ideation_modes": manifold_health.ready_modes,
@@ -378,6 +447,82 @@ class MetaHarnessLoop:
                     )
                     result_summary = "halted due to adversarial stalemate"
                     break
+                continue
+            if current_stage == "paper":
+                paper = PaperSynthesizer(self.filesystem.base_dir, runtime=self.agent_runtime).synthesize(
+                    project_id,
+                    final=all(self._task_state_by_id(task_states, task.task_id)["status"] == "completed" for task in decomposition.tasks if task.task_id != task_node.task_id),
+                    completion_reason="paper task synthesis",
+                    project_status="running",
+                )
+                result_payload = {
+                    "task_id": task_node.task_id,
+                    "stage": current_stage,
+                    "summary": "Synthesized project paper artifacts.",
+                    "primary_metric": 1.0,
+                    "code_path": paper["latex_path"],
+                    "artifact_dir": str(Path(paper["latex_path"]).parent),
+                    "generated_artifacts": [paper["latex_path"], paper["pdf_path"]],
+                    "executed_commands": [],
+                    "command_results": [],
+                    "classification": "success",
+                    "failure_type": "",
+                    "failure_summary": "",
+                    "failed_command": "",
+                    "failure_signature": "",
+                    "debug_focus": self._debug_focus(project_dir, run_n + 1),
+                    "citations": [],
+                    "agent_runtime": {
+                        "provider": None,
+                        "model": None,
+                        "primary_model": None,
+                        "attempted_models": [],
+                        "fallback_used": False,
+                        "next_action": "continue",
+                    },
+                    "errors": [],
+                    "status": "keep",
+                }
+                verification = {"passed": True, "checks": []}
+                report = self._run_adversarial_check(
+                    result_payload,
+                    criteria,
+                    task_context=self._adversarial_task_context(task_node, current_stage),
+                    verification=verification,
+                    oracle_result=None,
+                )
+                result_payload["adversarial_critical_blockers"] = report.critical_blockers
+                self.filesystem.write_json(run_dir / "trace.json", {"stage": current_stage, "paper_path": paper["pdf_path"]})
+                self.filesystem.write_json(run_dir / "result.json", result_payload)
+                self.filesystem.write_json(run_dir / "adversarial_report.json", report.to_dict())
+                self.filesystem.write_json(run_dir / "verification_report.json", verification)
+                if report.critical_blockers:
+                    self._mark_task_state(task_states, task_node.task_id, status="blocked", run_n=run_n, stage=current_stage, blockers=report.critical_blockers)
+                    failed_iterations += 1
+                    redirect_message = self._format_adversarial_blockers(report.critical_blockers)
+                else:
+                    self._mark_task_state(task_states, task_node.task_id, status="completed", run_n=run_n, stage=current_stage, blockers=[])
+                    failed_iterations = 0
+                    redirect_message = ""
+                self.filesystem.write_project_state(
+                    project_id,
+                    {
+                        "status": "running",
+                        "run_count": run_n,
+                        "current_stage": current_stage,
+                        "task_states": task_states,
+                        "ideation_available": ideation_available,
+                        "manifold_status": manifold_health.status,
+                        "ready_ideation_modes": manifold_health.ready_modes,
+                        "last_run_status": self._build_run_status(
+                            run_n=run_n,
+                            summary="paper synthesized" if not report.critical_blockers else "paper blocked by adversarial findings",
+                            stopping_decision=report.stopping_decision.to_dict(),
+                            verification=verification,
+                            result=result_payload,
+                        ),
+                    },
+                )
                 continue
             try:
                 execution = self.executor(
@@ -437,13 +582,28 @@ class MetaHarnessLoop:
             if self._stage_success(current_stage, execution["result"]) and not report.critical_blockers:
                 failed_iterations = 0
                 redirect_message = ""
-                current_stage = self._next_stage(current_stage)
+                self._mark_task_state(
+                    task_states,
+                    task_node.task_id,
+                    status="completed",
+                    run_n=run_n,
+                    stage=current_stage,
+                    blockers=[],
+                )
                 result_summary = f"{execution['result'].get('stage', current_stage)} stage complete"
             else:
                 failed_iterations += 1
                 repeated_failure_counts = self._update_repeated_failures(repeated_failure_counts, execution["result"])
                 if report.critical_blockers:
                     redirect_message = self._format_adversarial_blockers(report.critical_blockers)
+                self._mark_task_state(
+                    task_states,
+                    task_node.task_id,
+                    status="blocked",
+                    run_n=run_n,
+                    stage=current_stage,
+                    blockers=report.critical_blockers or [execution["result"].get("classification", "task_failed")],
+                )
                 result_summary = "continue iteration"
             self.filesystem.write_project_state(
                 project_id,
@@ -451,6 +611,7 @@ class MetaHarnessLoop:
                     "status": "running",
                     "run_count": run_n,
                     "current_stage": current_stage,
+                    "task_states": task_states,
                     "ideation_available": ideation_available,
                     "manifold_status": manifold_health.status,
                     "ready_ideation_modes": manifold_health.ready_modes,
@@ -470,6 +631,7 @@ class MetaHarnessLoop:
                     "status": "halted",
                     "run_count": run_n,
                     "current_stage": current_stage,
+                    "task_states": task_states,
                     "ideation_available": ideation_available,
                     "manifold_status": manifold_health.status,
                     "last_run_status": {
@@ -494,15 +656,21 @@ class MetaHarnessLoop:
             completion_reason=result_summary,
             project_status=project_status,
         )
-        self._update_causal_dag(project_dir / "causal_dag.json", project_id)
+        self._update_causal_dag(project_dir / "causal_dag.json", project_id, config.domain)
         self.taste_persistence.save_after_project(project_id, taste_model)
-        self.taste_persistence.merge_project_data(project_id, ledger.get_pareto_frontier())
+        verified_experiments = [
+            experiment
+            for experiment in ledger.get_pareto_frontier()
+            if str(experiment.get("status", "")).lower() in {"keep", "success"}
+        ]
+        self.taste_persistence.merge_project_data(project_id, verified_experiments)
         self.filesystem.write_project_state(
             project_id,
             {
                 "status": project_status,
                 "run_count": run_n,
                 "current_stage": current_stage,
+                "task_states": task_states,
                 "ideation_available": ideation_available,
                 "manifold_status": manifold_health.status,
                 "ready_ideation_modes": manifold_health.ready_modes,
@@ -726,9 +894,6 @@ class MetaHarnessLoop:
                     "next_action": agent_result.get("next_action"),
                 },
             }
-        if failed_iterations >= 5:
-            ideation_result = ideation.run(active_task, failed_iterations)
-            artifact_payload["ideation_candidates"] = [idea.to_dict() for idea in ideation_result]
         return {
             "trace": {
                 "instruction_used": run_n,
@@ -1038,7 +1203,6 @@ class MetaHarnessLoop:
         return bool(
             task_node
             and getattr(task_node, "requires_ml_optimizer", False)
-            and config.domain == "ml_efficiency"
             and agent_result.get("experiment_plan")
             and self._plan_has_real_commands(agent_result.get("experiment_plan"))
         )
@@ -1246,6 +1410,8 @@ class MetaHarnessLoop:
             prior_metric=ledger.get_by_task(task_node.task_id)[0]["primary_metric"] if ledger.get_by_task(task_node.task_id) else 0.0,
             compute_budget=config.compute_budget,
             ledger=ledger,
+            causal_dag=CausalDAG(self.taste_persistence.root_dir / "causal_dag_global.json"),
+            domain=config.domain,
         )
 
     def _task_for_stage(self, decomposition: Any, stage: str) -> Any:
@@ -1253,6 +1419,7 @@ class MetaHarnessLoop:
             "survey": ("survey prior work", "literature"),
             "oracle": ("oracle",),
             "execute": ("controlled experiments", "run controlled experiments", "experiment"),
+            "paper": ("paper", "synthesize"),
             "verify": ("verify experiment outputs", "verification"),
         }
         tasks = getattr(decomposition, "tasks", []) or []
@@ -1272,6 +1439,103 @@ class MetaHarnessLoop:
         except ValueError:
             return self.STAGE_SEQUENCE[0]
         return self.STAGE_SEQUENCE[min(index + 1, len(self.STAGE_SEQUENCE) - 1)]
+
+    def _stage_for_task(self, task_node: Any) -> str:
+        description = str(getattr(task_node, "description", "")).lower()
+        if "oracle" in description:
+            return "oracle"
+        if "verify" in description:
+            return "verify"
+        if "paper" in description or "synthesize" in description:
+            return "paper"
+        if "survey" in description or "literature" in description:
+            return "survey"
+        return "execute"
+
+    def _initialize_task_states(self, existing: Any, decomposition: Any) -> list[dict[str, Any]]:
+        existing_by_id = {
+            str(item.get("task_id", "")): item
+            for item in (existing or [])
+            if isinstance(item, dict) and str(item.get("task_id", "")).strip()
+        }
+        states: list[dict[str, Any]] = []
+        for task in getattr(decomposition, "tasks", []) or []:
+            previous = existing_by_id.get(task.task_id, {})
+            states.append(
+                {
+                    "task_id": task.task_id,
+                    "stage": self._stage_for_task(task),
+                    "status": str(previous.get("status", "pending")),
+                    "last_run_n": int(previous.get("last_run_n", 0)),
+                    "blockers": list(previous.get("blockers", [])),
+                    "verification_passed": bool(previous.get("verification_passed", False)),
+                    "adversarial_passed": bool(previous.get("adversarial_passed", False)),
+                }
+            )
+        return states
+
+    def _task_state_by_id(self, task_states: list[dict[str, Any]], task_id: str) -> dict[str, Any]:
+        for task_state in task_states:
+            if str(task_state.get("task_id")) == task_id:
+                return task_state
+        raise KeyError(task_id)
+
+    def _refresh_task_states(self, task_states: list[dict[str, Any]], decomposition: Any) -> list[dict[str, Any]]:
+        task_ids = {task.task_id for task in getattr(decomposition, "tasks", []) or []}
+        existing = {state["task_id"]: dict(state) for state in task_states if state.get("task_id") in task_ids}
+        refreshed = []
+        for task in getattr(decomposition, "tasks", []) or []:
+            state = existing.get(task.task_id, {"task_id": task.task_id, "stage": self._stage_for_task(task), "status": "pending", "last_run_n": 0, "blockers": [], "verification_passed": False, "adversarial_passed": False})
+            if state["status"] not in {"completed", "blocked", "running"}:
+                deps_complete = all(
+                    self._task_state_by_id(task_states, dependency)["status"] == "completed"
+                    for dependency in task.dependencies
+                ) if task.dependencies else True
+                state["status"] = "ready" if deps_complete else "pending"
+            refreshed.append(state)
+        return refreshed
+
+    def _select_next_task(self, decomposition: Any, task_states: list[dict[str, Any]]) -> Any:
+        if not getattr(decomposition, "tasks", None):
+            return None
+        priority = {"blocked": 0, "ready": 1, "running": 2, "pending": 3, "failed": 4, "completed": 5}
+        task_by_id = {task.task_id: task for task in decomposition.tasks}
+        candidates = [
+            state for state in task_states
+            if state.get("status") in {"blocked", "ready", "running"}
+        ]
+        if not candidates:
+            return None
+        selected = sorted(
+            candidates,
+            key=lambda item: (
+                priority.get(str(item.get("status")), 99),
+                [task.task_id for task in decomposition.tasks].index(item["task_id"]),
+            ),
+        )[0]
+        return task_by_id[selected["task_id"]]
+
+    def _mark_task_state(
+        self,
+        task_states: list[dict[str, Any]],
+        task_id: str,
+        *,
+        status: str,
+        run_n: int,
+        stage: str,
+        blockers: list[str],
+        verification_passed: bool | None = None,
+        adversarial_passed: bool | None = None,
+    ) -> None:
+        state = self._task_state_by_id(task_states, task_id)
+        state["status"] = status
+        state["last_run_n"] = run_n
+        state["stage"] = stage
+        state["blockers"] = list(blockers)
+        if verification_passed is not None:
+            state["verification_passed"] = verification_passed
+        if adversarial_passed is not None:
+            state["adversarial_passed"] = adversarial_passed
 
     def _stage_success(self, stage: str, result: dict[str, Any]) -> bool:
         classification = str(result.get("classification", ""))
@@ -1323,8 +1587,9 @@ class MetaHarnessLoop:
         )
         return report
 
-    def _update_causal_dag(self, dag_path: Path, project_id: str) -> None:
+    def _update_causal_dag(self, dag_path: Path, project_id: str, domain: str) -> None:
         dag = CausalDAG(dag_path)
+        global_dag = CausalDAG(self.taste_persistence.root_dir / "causal_dag_global.json")
         project_dir = self.filesystem.get_project_dir(project_id)
         for result_path in sorted((project_dir / "runs").glob("*/result.json")):
             payload = self.filesystem.read_json(result_path)
@@ -1342,9 +1607,11 @@ class MetaHarnessLoop:
                     effect_size=round(effect_size, 6),
                     confidence=confidence,
                     experiment_ids=[f"{project_id}:{result_path.parent.name}"],
+                    domain=domain,
                 )
             except ValueError:
                 continue
+        global_dag.merge_global_dag(self.filesystem.read_json(dag_path))
 
     def _requested_modules(
         self,

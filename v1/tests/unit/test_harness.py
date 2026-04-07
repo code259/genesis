@@ -53,6 +53,23 @@ def test_decomposer_builds_task_tree():
     assert len(tree.tasks) == 5
     verification_task = next(task for task in tree.tasks if "Verify experiment outputs" in task.description)
     assert len(verification_task.dependencies) == 2
+    experiment_task = next(task for task in tree.tasks if "ML efficiency experiments" in task.description or "controlled ML efficiency experiments" in task.description)
+    assert experiment_task.requires_ml_optimizer is True
+
+
+def test_decomposer_astrophysics_fallback_is_domain_specific():
+    decomposer = TaskDecomposer()
+    config = ProjectConfig(
+        research_question="Estimate redshift",
+        domain="astrophysics",
+        compute_budget="local_gpu",
+        time_budget_hours=2,
+        domain_knowledge_model="none",
+        output_dir="projects",
+    )
+    tree = decomposer.decompose(config)
+    assert any("astrophysics literature" in task.description.lower() for task in tree.tasks)
+    assert any("astrophysics data" in task.description.lower() for task in tree.tasks)
 
 
 def test_token_budget_cloud_allocation_expands_history():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from genesis.models import ExperimentProposal
+from genesis.storage.causal_dag import CausalDAG
 from genesis.storage.ledger import ExperimentLedger
 
 
@@ -13,6 +14,8 @@ class ExperimentProposer:
         prior_metric: float = 0.0,
         compute_budget: str = "local_gpu",
         ledger: ExperimentLedger | None = None,
+        causal_dag: CausalDAG | None = None,
+        domain: str = "",
     ) -> list[ExperimentProposal]:
         history = ledger.get_by_task(task_id) if ledger else []
         prior_metric = max([prior_metric] + [float(item.get("primary_metric", 0.0)) for item in history])
@@ -20,6 +23,7 @@ class ExperimentProposer:
         best_record = history[0] if history else {}
         base_end = max(prior_metric, float(best_record.get("primary_metric", 0.0)), 0.35)
         scale = 0.7 if "cpu" in compute_budget else 1.0
+        high_confidence_edges = causal_dag.get_high_confidence_edges_for_domain(domain) if causal_dag else []
         warmup_candidates = self._warmup_candidates(history, scale=scale)
         step_candidates = self._step_candidates(history, scale=scale)
         learning_rates = self._learning_rates(history, scale=scale)
@@ -40,9 +44,16 @@ class ExperimentProposer:
             ]
             if anomalies and index == 0:
                 config_parts.append("stabilize_after_anomaly=true")
+            if high_confidence_edges and index == 0:
+                config_parts.append("reuse_high_confidence_causal_signal=true")
             proposals.append(
                 ExperimentProposal(
-                    description=self._describe_variant(task_id, index=index, anomalies=bool(anomalies)),
+                    description=self._describe_variant(
+                        task_id,
+                        index=index,
+                        anomalies=bool(anomalies),
+                        has_causal_guidance=bool(high_confidence_edges),
+                    ),
                     code_diff="; ".join(config_parts),
                     expected_metric=round(expected_metric, 4),
                     expected_trajectory=[
@@ -75,7 +86,9 @@ class ExperimentProposer:
             base = 0.12
         return [round(base * scale, 3), round(base * 0.85 * scale, 3), round(base * 1.1 * scale, 3)]
 
-    def _describe_variant(self, task_id: str, *, index: int, anomalies: bool) -> str:
+    def _describe_variant(self, task_id: str, *, index: int, anomalies: bool, has_causal_guidance: bool = False) -> str:
         if anomalies and index == 0:
             return f"Stabilization experiment for anomalous task {task_id}"
+        if has_causal_guidance and index == 0:
+            return f"Causally guided experiment variant {index + 1} for task {task_id}"
         return f"Optimizer experiment variant {index + 1} for task {task_id}"

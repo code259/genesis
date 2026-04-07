@@ -66,6 +66,12 @@ class DomainOracleGenerator:
                 [
                     "    if any(abs(value) > 1e9 for value in numeric_values):",
                     "        failures.append('CRITICAL_PHYSICS_VIOLATION')",
+                    "    if any('ra' in key.lower() and not (0.0 <= float(value) <= 360.0) for payload in parsed_payloads for key, value in payload.items() if isinstance(payload, dict) and isinstance(value, (int, float))):",
+                    "        failures.append('invalid_ra_range')",
+                    "    if any('dec' in key.lower() and not (-90.0 <= float(value) <= 90.0) for payload in parsed_payloads for key, value in payload.items() if isinstance(payload, dict) and isinstance(value, (int, float))):",
+                    "        failures.append('invalid_dec_range')",
+                    "    if any('redshift' in key.lower() and not (0.0 <= float(value) <= 15.0) for payload in parsed_payloads for key, value in payload.items() if isinstance(payload, dict) and isinstance(value, (int, float))):",
+                    "        failures.append('invalid_redshift_range')",
                 ]
             )
         elif domain == "ml_efficiency":
@@ -73,6 +79,19 @@ class DomainOracleGenerator:
                 [
                     "    if primary_metric is not None and primary_metric < 0.0:",
                     "        failures.append('negative_metric_detected')",
+                    "    if primary_metric is not None and primary_metric > 1.0:",
+                    "        warnings.append('metric_above_unit_range')",
+                    "    if not any('loss' in key.lower() or 'accuracy' in key.lower() for payload in parsed_payloads for key in payload.keys() if isinstance(payload, dict)):",
+                    "        warnings.append('missing_ml_metric_fields')",
+                ]
+            )
+        else:
+            domain_rules.extend(
+                [
+                    "    if primary_metric is None:",
+                    "        warnings.append('primary_metric_missing')",
+                    "    if not json_files:",
+                    "        failures.append('no_structured_outputs')",
                 ]
             )
 
@@ -107,6 +126,7 @@ class DomainOracleGenerator:
             "    warnings = []",
             "    numeric_values = []",
             "    json_files = []",
+            "    parsed_payloads = []",
             "    primary_metric = None",
             "",
             "    if not outputs.exists():",
@@ -122,6 +142,7 @@ class DomainOracleGenerator:
             "            except Exception:",
             "                failures.append(f'invalid_json::{candidate.name}')",
             "                continue",
+            "            parsed_payloads.append(payload)",
             "            numeric_values.extend(_flatten_numeric_values(payload))",
             "            if isinstance(payload, dict) and primary_metric is None and isinstance(payload.get('primary_metric'), (int, float)):",
             "                primary_metric = float(payload['primary_metric'])",

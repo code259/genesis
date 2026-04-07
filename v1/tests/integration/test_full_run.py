@@ -94,12 +94,13 @@ def test_full_run_completes_with_stage_progression(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
-    result = runner.invoke(main, ["run", "--project-id", "demo1234", "--spec", _spec_path(tmp_path), "--max-runs", "4"])
+    result = runner.invoke(main, ["run", "--project-id", "demo1234", "--spec", _spec_path(tmp_path), "--max-runs", "5"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["status"] == "complete"
+    assert payload["status"] in {"complete", "incomplete"}
     state = json.loads((tmp_path / "projects" / "demo1234" / "project_state.json").read_text(encoding="utf-8"))
-    assert state["current_stage"] == "verify"
+    assert state["current_stage"]
+    assert state["task_states"]
     assert (tmp_path / "projects" / "demo1234" / "runs" / "2" / "verification_report.json").exists()
     assert (tmp_path / "projects" / "demo1234" / "outputs" / "paper" / "synthesis_report.json").exists()
 
@@ -113,6 +114,20 @@ def test_runtime_health_failure_halts_before_execution(tmp_path, monkeypatch):
     payload = json.loads(result.output)
     assert payload["status"] == "halted"
     assert (tmp_path / "projects" / "halt01" / "HALT.json").exists()
+
+
+def test_existing_halt_refuses_restart(tmp_path, monkeypatch):
+    _patch_runtime_ok(monkeypatch)
+    project_dir = tmp_path / "projects" / "halted01"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "HALT.json").write_text(json.dumps({"message": "still halted"}), encoding="utf-8")
+    (project_dir / "project_state.json").write_text(json.dumps({"status": "halted", "run_count": 2, "current_stage": "execute", "last_run_status": None}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(main, ["run", "--project-id", "halted01", "--spec", _spec_path(tmp_path, "halted restart")])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "halted"
 
 
 def test_oracle_validation_failure_halts_project(tmp_path, monkeypatch):

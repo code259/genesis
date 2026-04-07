@@ -23,6 +23,8 @@ class CausalDAG:
         effect_size: float,
         confidence: float,
         experiment_ids: list[str],
+        *,
+        domain: str = "",
     ) -> None:
         graph = self._load()
         graph["nodes"] = sorted(set(graph["nodes"]) | {source_node, target_node})
@@ -33,6 +35,7 @@ class CausalDAG:
                 "effect_size": effect_size,
                 "confidence": confidence,
                 "experiment_ids": experiment_ids,
+                "domain": domain,
             }
         )
         if self._has_cycle(graph):
@@ -44,6 +47,14 @@ class CausalDAG:
 
     def get_high_confidence_edges(self, threshold: float = 0.8) -> list[dict[str, Any]]:
         return [edge for edge in self._load()["edges"] if edge["confidence"] >= threshold]
+
+    def get_high_confidence_edges_for_domain(self, domain: str, threshold: float = 0.8) -> list[dict[str, Any]]:
+        normalized = domain.strip().lower()
+        return [
+            edge
+            for edge in self.get_high_confidence_edges(threshold=threshold)
+            if not normalized or str(edge.get("domain", "")).strip().lower() in {"", normalized}
+        ]
 
     def merge_global_dag(self, project_dag: dict[str, Any]) -> None:
         graph = self._load()
