@@ -12,7 +12,7 @@ from genesis.domain_knowledge.registry import DomainKnowledgeRegistry
 from genesis.harness.instruction_composer import InstructionComposer
 from genesis.harness.decomposer import TaskDecomposer
 from genesis.harness.token_budget import TokenBudget
-from genesis.models import ExperimentProposal, ProjectResult
+from genesis.models import AdversarialReport, CheckResult, ExperimentProposal, ProjectResult, StoppingDecision
 from genesis.modules.adversarial.criteria_generator import AcceptanceCriteriaGenerator
 from genesis.modules.adversarial.orchestrator import AdversarialOrchestrator
 from genesis.modules.ideation.greedy import GreedyAdjacencySearch
@@ -41,6 +41,7 @@ class MetaHarnessLoop:
     ADVERSARIAL_ITERATION_LIMIT = 3
     ESCALATION_RETRY_LIMIT = 2
     REPEATED_FAILURE_LIMIT = 3
+    STAGE_SEQUENCE = ["survey", "oracle", "execute", "verify"]
 
     def __init__(
         self,
@@ -48,13 +49,15 @@ class MetaHarnessLoop:
         projects_root: Union[str, Path],
         taste_root: Union[str, Path],
         executor: Optional[Any] = None,
+        runtime_config_path: Optional[Union[str, Path]] = None,
     ) -> None:
+        self.repo_root = Path(__file__).resolve().parents[2]
         self.filesystem = ProjectFilesystem(projects_root)
         self.token_budget = TokenBudget()
         self.history_reader = SelectiveHistoryReader(self.filesystem, self.token_budget)
         self.composer = InstructionComposer()
         self.agent_runtime = CodingAgentRuntime(
-            Path(__file__).resolve().parents[2] / ".opencode" / "oh-my-openagent.jsonc"
+            runtime_config_path or self.repo_root / "configs" / "runtime_omo.jsonc"
         )
         self.decomposer = TaskDecomposer(runtime=self.agent_runtime)
         self.adversarial = AdversarialOrchestrator()
@@ -68,6 +71,20 @@ class MetaHarnessLoop:
 
     def run(self, project_id: str, config: ProjectConfig, max_runs: int = 50) -> ProjectResult:
         project_dir = self.filesystem.init_project(project_id, config.to_dict())
+        health = self.agent_runtime.check_health(probe_models=False)
+        self.filesystem.write_json(project_dir / "runtime_health.json", health)
+        if not health.get("passed", False):
+            self.filesystem.write_halt(
+                project_id,
+                {"type": "RUNTIME_HEALTHCHECK_FAILED", "checks": health.get("checks", [])},
+            )
+            return ProjectResult(
+                project_id=project_id,
+                status="halted",
+                paper_path=None,
+                run_count=0,
+                summary="halted due to runtime healthcheck failure",
+            )
         try:
             ledger = ExperimentLedger(project_dir / "experiments" / "ledger.sqlite3")
         except Exception as exc:  # noqa: BLE001
@@ -76,7 +93,11 @@ class MetaHarnessLoop:
                 {"type": "LEDGER_CORRUPTION", "message": str(exc)},
             )
             raise
-        manifold = ManifoldIndex(project_dir / "knowledge" / "manifold")
+        global_manifold = self.repo_root / "manifold_index"
+        manifold = ManifoldIndex(global_manifold if global_manifold.exists() else project_dir / "knowledge" / "manifold")
+        manifold_health = manifold.assess_health()
+        ideation_available = bool(manifold_health.ready_modes)
+        self.filesystem.write_json(project_dir / "knowledge" / "manifold_health.json", manifold_health.to_dict())
         optimizer = ParallelExperimentManager(project_dir / "runtime" / "sandboxes")
         ideation = IdeationOrchestrator(
             greedy=GreedyAdjacencySearch(manifold),
@@ -91,15 +112,16 @@ class MetaHarnessLoop:
         domain_provider = self.domain_registry.get_provider(config.domain)
         domain_context = domain_provider.initialize(config.to_dict())
         (project_dir / "knowledge" / "domain_context.md").write_text(domain_context, encoding="utf-8")
-        oracle_source = self.oracle_generator.generate(config)
         oracle_path = project_dir / "knowledge" / "oracle.py"
-        oracle_path.write_text(oracle_source, encoding="utf-8")
         taste_model = self.taste_persistence.load_for_project(project_id, project_dir / "knowledge" / "taste_snapshot.json")
         failed_iterations = 0
         redirect_message = ""
         run_n = 0
         stopping_criteria_satisfied = False
         repeated_failure_counts: dict[str, int] = {}
+        state = self.filesystem.read_project_state(project_id)
+        current_stage = str(state.get("current_stage") or self.STAGE_SEQUENCE[0])
+        latest_execute_result: dict[str, Any] | None = None
 
         result_summary = "unfinished"
         for run_n in range(1, max_runs + 1):
@@ -117,28 +139,246 @@ class MetaHarnessLoop:
                 if intervention.get("type") == "REJECT":
                     failed_iterations += 1
                 self.filesystem.clear_human_intervention(project_id)
-            task_node = decomposition.tasks[min(run_n - 1, len(decomposition.tasks) - 1)] if decomposition.tasks else None
+            task_node = self._task_for_stage(decomposition, current_stage)
             budget_allocations = self.token_budget.allocate(
                 128000 if "cloud" in config.compute_budget.lower() or "groq" in config.compute_budget.lower() else 18000
             )
             history = self.history_reader.summarize_experiment_history(project_id)
-            requested_modules = self._requested_modules(config=config, task_node=task_node, failed_iterations=failed_iterations)
+            if self._ideation_required(failed_iterations=failed_iterations, current_stage=current_stage) and not ideation_available:
+                self.filesystem.write_halt(
+                    project_id,
+                    {
+                        "type": "MANIFOLD_HEALTH_REQUIRED",
+                        "message": "Ideation was required but the manifold is not healthy enough.",
+                        "reasons": manifold_health.reasons,
+                        "run_n": run_n,
+                    },
+                )
+                result_summary = "halted due to manifold health requirements"
+                break
+            requested_modules = self._requested_modules(
+                config=config,
+                task_node=task_node,
+                failed_iterations=failed_iterations,
+                current_stage=current_stage,
+            )
+            stage_domain_context = domain_context
+            if hasattr(domain_provider, "get_relevant_context") and current_stage in {"survey", "execute"}:
+                try:
+                    query = task_node.description if task_node else config.research_question
+                    stage_domain_context = domain_provider.get_relevant_context(query)
+                except Exception:  # noqa: BLE001
+                    stage_domain_context = domain_context
             current_task_context = self._task_context(
                 config=config,
                 run_n=run_n,
                 failed_iterations=failed_iterations,
                 redirect_message=redirect_message,
+                current_stage=current_stage,
             )
             instruction = self.composer.compose(
                 config=config,
                 belief_summary=f"tracked_experiments={len(ledger.get_pareto_frontier())}",
                 retrieved_history=history,
-                domain_context=domain_context,
+                domain_context=stage_domain_context,
                 current_task_context=current_task_context,
                 budget_allocations=budget_allocations,
                 requested_modules=requested_modules,
             )
             self.filesystem.write_instruction(project_id, run_n, instruction)
+            run_dir = self.filesystem.get_run_dir(project_id, run_n)
+            if current_stage == "oracle":
+                oracle_source = self.oracle_generator.generate(config)
+                oracle_path.write_text(oracle_source, encoding="utf-8")
+                oracle_validation = self.verification.oracle_validator.validate_with_synthetic_data(oracle_path)
+                result_payload = {
+                    "task_id": task_node.task_id if task_node else "oracle",
+                    "stage": current_stage,
+                    "summary": "Generated and validated project oracle.",
+                    "primary_metric": 1.0 if oracle_validation.get("passed") else 0.0,
+                    "code_path": str(oracle_path),
+                    "artifact_dir": str(oracle_path.parent),
+                    "generated_artifacts": [str(oracle_path)],
+                    "executed_commands": [],
+                    "command_results": [],
+                    "classification": "success" if oracle_validation.get("passed") else "oracle_validation_failed",
+                    "failure_type": "" if oracle_validation.get("passed") else "oracle_validation_failed",
+                    "failure_summary": "" if oracle_validation.get("passed") else "synthetic validation failed",
+                    "failed_command": "",
+                    "failure_signature": "" if oracle_validation.get("passed") else "oracle_validation_failed",
+                    "debug_focus": self._debug_focus(project_dir, run_n + 1),
+                    "citations": [],
+                    "agent_runtime": {
+                        "provider": None,
+                        "model": None,
+                        "primary_model": None,
+                        "attempted_models": [],
+                        "fallback_used": False,
+                        "next_action": "continue",
+                    },
+                    "errors": [],
+                    "status": "keep" if oracle_validation.get("passed") else "discard",
+                }
+                report = self._stage_report(current_stage, success=bool(oracle_validation.get("passed")), reason="oracle_ready")
+                verification = {"passed": bool(oracle_validation.get("passed")), "checks": [oracle_validation]}
+                report = self._run_adversarial_check(
+                    result_payload,
+                    criteria,
+                    task_context=self._adversarial_task_context(task_node, current_stage),
+                    verification=verification,
+                    oracle_result=oracle_validation,
+                )
+                result_payload["adversarial_critical_blockers"] = report.critical_blockers
+                self.filesystem.write_json(run_dir / "trace.json", {"stage": current_stage, "oracle_path": str(oracle_path)})
+                self.filesystem.write_json(run_dir / "result.json", result_payload)
+                self.filesystem.write_json(run_dir / "adversarial_report.json", report.to_dict())
+                self.filesystem.write_json(run_dir / "verification_report.json", verification)
+                if not oracle_validation.get("passed"):
+                    self.filesystem.write_halt(
+                        project_id,
+                        {"type": "ORACLE_VALIDATION_FAILED", "message": json.dumps(oracle_validation), "run_n": run_n},
+                    )
+                    result_summary = "halted due to oracle validation failure"
+                    break
+                if report.critical_blockers:
+                    failed_iterations += 1
+                    redirect_message = self._format_adversarial_blockers(report.critical_blockers)
+                else:
+                    current_stage = self._next_stage(current_stage)
+                    failed_iterations = 0
+                    redirect_message = ""
+                self.filesystem.write_project_state(
+                    project_id,
+                    {
+                        "status": "running",
+                        "run_count": run_n,
+                        "current_stage": current_stage,
+                        "ideation_available": ideation_available,
+                        "manifold_status": manifold_health.status,
+                        "ready_ideation_modes": manifold_health.ready_modes,
+                        "last_run_status": self._build_run_status(
+                            run_n=run_n,
+                            summary="oracle ready" if not report.critical_blockers else "oracle blocked by adversarial findings",
+                            stopping_decision=report.stopping_decision.to_dict(),
+                            verification=verification,
+                            result=result_payload,
+                        ),
+                    },
+                )
+                continue
+            if current_stage == "verify":
+                latest_execute_result = latest_execute_result or self._latest_stage_result(project_dir, "execute")
+                if latest_execute_result is None:
+                    self.filesystem.write_halt(
+                        project_id,
+                        {"type": "VERIFY_WITHOUT_EXECUTION", "message": "verify stage has no execute-stage artifacts", "run_n": run_n},
+                    )
+                    result_summary = "halted due to missing execute-stage artifacts"
+                    break
+                verification = self.verification.run(
+                    Path(latest_execute_result["artifact_dir"]),
+                    project_id,
+                    oracle_path=oracle_path if oracle_path.exists() else None,
+                )
+                report = self._run_adversarial_check(
+                    latest_execute_result,
+                    criteria,
+                    task_context=self._adversarial_task_context(task_node, current_stage),
+                    verification=verification,
+                    oracle_result=self.verification.oracle_validator.validate_with_synthetic_data(oracle_path) if oracle_path.exists() else None,
+                )
+                result_payload = dict(latest_execute_result)
+                result_payload["stage"] = current_stage
+                result_payload["summary"] = f"Verification review for execute-stage artifacts. {result_payload.get('summary', '')}".strip()
+                result_payload["adversarial_critical_blockers"] = report.critical_blockers
+                self.filesystem.write_json(run_dir / "trace.json", {"stage": current_stage, "source_run_stage": "execute"})
+                self.filesystem.write_json(run_dir / "result.json", result_payload)
+                self.filesystem.write_json(run_dir / "adversarial_report.json", report.to_dict())
+                self.filesystem.write_json(run_dir / "verification_report.json", verification)
+                log_event(
+                    log_path,
+                    project_id=project_id,
+                    run_n=run_n,
+                    component="meta_harness",
+                    event_type="run_completed",
+                    payload={"acceptance_ratio": report.acceptance_ratio, "verification_passed": verification["passed"]},
+                )
+                if self._check_stopping_criteria(report) and verification["passed"]:
+                    result_summary = "stopping criteria satisfied"
+                    stopping_criteria_satisfied = True
+                    self.filesystem.write_project_state(
+                        project_id,
+                        {
+                            "status": "complete",
+                            "run_count": run_n,
+                            "current_stage": current_stage,
+                            "last_run_status": self._build_run_status(
+                                run_n=run_n,
+                                summary=result_summary,
+                                stopping_decision=report.stopping_decision.to_dict(),
+                                verification=verification,
+                                result=result_payload,
+                            ),
+                        },
+                    )
+                    break
+                failed_iterations += 1
+                current_stage = "execute"
+                repeated_failure_counts = self._update_repeated_failures(repeated_failure_counts, result_payload)
+                escalation_attempts = max(0, failed_iterations - self.ADVERSARIAL_ITERATION_LIMIT)
+                self.filesystem.write_project_state(
+                    project_id,
+                    {
+                        "status": "running",
+                        "run_count": run_n,
+                        "current_stage": current_stage,
+                        "ideation_available": ideation_available,
+                        "manifold_status": manifold_health.status,
+                        "ready_ideation_modes": manifold_health.ready_modes,
+                        "escalation_attempts": escalation_attempts,
+                        "last_run_status": self._build_run_status(
+                            run_n=run_n,
+                            summary="verification failed; returning to execute stage",
+                            stopping_decision=report.stopping_decision.to_dict(),
+                            verification=verification,
+                            result=result_payload,
+                        ),
+                    },
+                )
+                if failed_iterations >= self.ADVERSARIAL_ITERATION_LIMIT:
+                    redirect_message = (
+                        "Change approach: prior attempts failed verification/adversarial gating. "
+                        "Use a materially different tactic and surface the rationale."
+                    )
+                    stubborn_failure = self._repeated_failure_message(repeated_failure_counts)
+                    if stubborn_failure:
+                        redirect_message += (
+                            f" Avoid repeating failure pattern: {stubborn_failure}. "
+                            "First diagnose the root cause from the recorded stderr, then propose a repaired or alternate branch."
+                        )
+                    self.filesystem.write_json(
+                        run_dir / "escalation_report.json",
+                        {
+                            "failed_iterations": failed_iterations,
+                            "escalation_attempts": escalation_attempts,
+                            "message": redirect_message,
+                        },
+                    )
+                if failed_iterations >= 5:
+                    ideation_result = ideation.run_with_status(config.research_question, failed_iterations, taste_model=taste_model)
+                    self.filesystem.write_json(run_dir / "ideation_report.json", ideation_result.to_dict())
+                if escalation_attempts >= self.ESCALATION_RETRY_LIMIT:
+                    self.filesystem.write_halt(
+                        project_id,
+                        {
+                            "type": "ADVERSARIAL_STALEMATE",
+                            "message": "Exceeded adversarial retry threshold after escalation.",
+                            "run_n": run_n,
+                        },
+                    )
+                    result_summary = "halted due to adversarial stalemate"
+                    break
+                continue
             try:
                 execution = self.executor(
                     project_dir=project_dir,
@@ -174,112 +414,64 @@ class MetaHarnessLoop:
                 )
                 result_summary = "halted due to unhandled runtime failure"
                 break
-            run_dir = self.filesystem.get_run_dir(project_id, run_n)
+            execution["trace"]["stage"] = current_stage
+            execution["result"]["stage"] = current_stage
             self.filesystem.write_json(run_dir / "trace.json", execution["trace"])
             self.filesystem.write_json(run_dir / "result.json", execution["result"])
-            report = self._run_adversarial_check(execution["result"], criteria)
-            self.filesystem.write_json(run_dir / "adversarial_report.json", report.to_dict())
             verification = self.verification.run(
                 Path(execution["result"]["artifact_dir"]),
                 project_id,
-                oracle_path=oracle_path,
+                oracle_path=oracle_path if oracle_path.exists() and current_stage == "execute" else None,
             )
+            report = self._run_adversarial_check(
+                execution["result"],
+                criteria,
+                task_context=self._adversarial_task_context(task_node, current_stage),
+                verification=verification,
+                oracle_result=None,
+            )
+            self.filesystem.write_json(run_dir / "adversarial_report.json", report.to_dict())
             self.filesystem.write_json(run_dir / "verification_report.json", verification)
-            log_event(
-                log_path,
-                project_id=project_id,
-                run_n=run_n,
-                component="meta_harness",
-                event_type="run_completed",
-                payload={
-                    "acceptance_ratio": report.acceptance_ratio,
-                    "verification_passed": verification["passed"],
-                },
-            )
-            repeated_failure_counts = self._update_repeated_failures(repeated_failure_counts, execution["result"])
-            if self._check_stopping_criteria(report) and verification["passed"]:
-                result_summary = "stopping criteria satisfied"
-                stopping_criteria_satisfied = True
+            latest_execute_result = execution["result"] if current_stage == "execute" else latest_execute_result
+            execution["result"]["adversarial_critical_blockers"] = report.critical_blockers
+            if self._stage_success(current_stage, execution["result"]) and not report.critical_blockers:
                 failed_iterations = 0
                 redirect_message = ""
-                self.filesystem.write_project_state(
-                    project_id,
-                    {
-                            "status": "complete",
-                            "run_count": run_n,
-                            "last_run_status": self._build_run_status(
-                                run_n=run_n,
-                                summary=result_summary,
-                                stopping_decision=report.stopping_decision.to_dict(),
-                                verification=verification,
-                                result=execution["result"],
-                            ),
-                    },
-                )
-                break
-            failed_iterations += 1
-            escalation_attempts = max(0, failed_iterations - self.ADVERSARIAL_ITERATION_LIMIT)
+                current_stage = self._next_stage(current_stage)
+                result_summary = f"{execution['result'].get('stage', current_stage)} stage complete"
+            else:
+                failed_iterations += 1
+                repeated_failure_counts = self._update_repeated_failures(repeated_failure_counts, execution["result"])
+                if report.critical_blockers:
+                    redirect_message = self._format_adversarial_blockers(report.critical_blockers)
+                result_summary = "continue iteration"
             self.filesystem.write_project_state(
                 project_id,
                 {
                     "status": "running",
                     "run_count": run_n,
-                    "escalation_attempts": escalation_attempts,
+                    "current_stage": current_stage,
+                    "ideation_available": ideation_available,
+                    "manifold_status": manifold_health.status,
+                    "ready_ideation_modes": manifold_health.ready_modes,
                     "last_run_status": self._build_run_status(
                         run_n=run_n,
-                        summary="continue iteration",
+                        summary=result_summary,
                         stopping_decision=report.stopping_decision.to_dict(),
                         verification=verification,
                         result=execution["result"],
                     ),
                 },
             )
-            if failed_iterations >= self.ADVERSARIAL_ITERATION_LIMIT:
-                redirect_message = (
-                    "Change approach: prior attempts failed verification/adversarial gating. "
-                    "Use a materially different tactic and surface the rationale."
-                )
-                stubborn_failure = self._repeated_failure_message(repeated_failure_counts)
-                if stubborn_failure:
-                    redirect_message += (
-                        f" Avoid repeating failure pattern: {stubborn_failure}. "
-                        "First diagnose the root cause from the recorded stderr, then propose a repaired or alternate branch."
-                    )
-                self.filesystem.write_json(
-                    run_dir / "escalation_report.json",
-                    {
-                        "failed_iterations": failed_iterations,
-                        "escalation_attempts": escalation_attempts,
-                        "message": redirect_message,
-                    },
-                )
-            if failed_iterations >= 5:
-                ideas = ideation.run(
-                    config.research_question,
-                    failed_iterations,
-                    taste_model=taste_model,
-                )
-                self.filesystem.write_json(
-                    run_dir / "ideation_report.json",
-                    {"ideas": [idea.to_dict() for idea in ideas]},
-                )
-            if escalation_attempts >= self.ESCALATION_RETRY_LIMIT:
-                self.filesystem.write_halt(
-                    project_id,
-                    {
-                        "type": "ADVERSARIAL_STALEMATE",
-                        "message": "Exceeded adversarial retry threshold after escalation.",
-                        "run_n": run_n,
-                    },
-                )
-                result_summary = "halted due to adversarial stalemate"
-                break
         if (project_dir / "HALT.json").exists():
             self.filesystem.write_project_state(
                 project_id,
                 {
                     "status": "halted",
                     "run_count": run_n,
+                    "current_stage": current_stage,
+                    "ideation_available": ideation_available,
+                    "manifold_status": manifold_health.status,
                     "last_run_status": {
                         "run_n": run_n,
                         "summary": result_summary,
@@ -310,6 +502,10 @@ class MetaHarnessLoop:
             {
                 "status": project_status,
                 "run_count": run_n,
+                "current_stage": current_stage,
+                "ideation_available": ideation_available,
+                "manifold_status": manifold_health.status,
+                "ready_ideation_modes": manifold_health.ready_modes,
                 "last_run_status": {
                     "run_n": run_n,
                     "summary": result_summary,
@@ -437,6 +633,7 @@ class MetaHarnessLoop:
                         "baseline_metric": proposal.expected_trajectory[0],
                         "step_gain": 0.05,
                         "epochs": len(proposal.expected_trajectory),
+                        "command": proposal.command,
                     }
                     for index, proposal in enumerate(proposals, start=1)
                 ],
@@ -488,6 +685,15 @@ class MetaHarnessLoop:
                     "next_action": agent_result.get("next_action"),
                 },
             }
+        elif str(agent_result.get("validation_mode", "")) == "relaxed_plan_only":
+            artifact_payload = self._materialize_relaxed_plan_payload(
+                project_dir=project_dir,
+                artifact_dir=artifact_dir,
+                task_node=task_node,
+                run_n=run_n,
+                summary_parts=summary_parts,
+                agent_result=agent_result,
+            )
         else:
             failure_type = "non_actionable_plan"
             failure_summary = "model returned no files, commands, or usable experiment plan"
@@ -535,6 +741,83 @@ class MetaHarnessLoop:
                 "debug_focus": self._debug_focus(project_dir, run_n),
             },
             "result": artifact_payload,
+        }
+
+    def _materialize_relaxed_plan_payload(
+        self,
+        *,
+        project_dir: Path,
+        artifact_dir: Path,
+        task_node: Any,
+        run_n: int,
+        summary_parts: list[str],
+        agent_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        plan_path = artifact_dir / "execution_plan.md"
+        extra = {
+            key: value
+            for key, value in agent_result.items()
+            if key
+            not in {
+                "summary",
+                "artifact_plan",
+                "command_plan",
+                "experiment_plan",
+                "citations",
+                "next_action",
+                "provider",
+                "model",
+                "primary_model",
+                "attempted_models",
+                "fallback_used",
+                "raw_response",
+                "retryable",
+                "error_class",
+                "validation_mode",
+            }
+        }
+        sections = [
+            "# Genesis Execution Plan",
+            "",
+            f"Run: {run_n}",
+            f"Task: {getattr(task_node, 'task_id', f'run-{run_n}')}",
+            "",
+            "## Summary",
+            str(agent_result.get("summary", "")).strip() or "No summary provided.",
+        ]
+        if extra:
+            sections.extend(["", "## Structured Details", json.dumps(extra, indent=2)])
+        raw_response = str(agent_result.get("raw_response", "")).strip()
+        if raw_response:
+            sections.extend(["", "## Raw Response", "```json", raw_response, "```"])
+        plan_path.write_text("\n".join(sections).strip() + "\n", encoding="utf-8")
+        return {
+            "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
+            "summary": " ".join(summary_parts + [str(agent_result.get("summary", "")).strip()]).strip(),
+            "primary_metric": 0.5,
+            "code_path": str(plan_path),
+            "errors": [],
+            "artifact_dir": str(artifact_dir),
+            "generated_artifacts": [str(plan_path)],
+            "executed_commands": [],
+            "command_results": [],
+            "classification": "plan_materialized",
+            "failure_type": "",
+            "failure_summary": "",
+            "failed_command": "",
+            "failure_signature": "",
+            "debug_focus": self._debug_focus(project_dir, run_n + 1),
+            "citations": agent_result.get("citations", []),
+            "agent_runtime": {
+                "provider": agent_result.get("provider"),
+                "model": agent_result.get("model"),
+                "primary_model": agent_result.get("primary_model"),
+                "attempted_models": agent_result.get("attempted_models", []),
+                "fallback_used": agent_result.get("fallback_used", False),
+                "next_action": agent_result.get("next_action"),
+                "validation_mode": agent_result.get("validation_mode"),
+            },
+            "status": "keep",
         }
 
     def _execute_agent_work(
@@ -757,6 +1040,21 @@ class MetaHarnessLoop:
             and getattr(task_node, "requires_ml_optimizer", False)
             and config.domain == "ml_efficiency"
             and agent_result.get("experiment_plan")
+            and self._plan_has_real_commands(agent_result.get("experiment_plan"))
+        )
+
+    def _plan_has_real_commands(self, plan: Any) -> bool:
+        if not isinstance(plan, list) or not plan:
+            return False
+        return all(
+            isinstance(item, dict)
+            and (
+                isinstance(item.get("command"), str)
+                and str(item.get("command")).strip()
+                or isinstance(item.get("command"), list)
+                and bool(item.get("command"))
+            )
+            for item in plan
         )
 
     def _execution_context(self, project_dir: Path, run_n: int) -> dict[str, Any]:
@@ -808,9 +1106,12 @@ class MetaHarnessLoop:
             "stopping_decision": stopping_decision,
             "verification_passed": bool(verification.get("passed", False)),
             "task_id": result.get("task_id"),
+            "stage": result.get("stage", ""),
             "artifact_dir": result.get("artifact_dir"),
             "classification": result.get("classification", ""),
             "failure_type": result.get("failure_type", ""),
+            "adversarial_passed": not bool(result.get("adversarial_critical_blockers", [])),
+            "critical_blockers": result.get("adversarial_critical_blockers", []),
         }
 
     def _update_repeated_failures(
@@ -871,10 +1172,26 @@ class MetaHarnessLoop:
             return ""
         return f"Repeated failure signature ({count}x): {signature}"
 
-    def _run_adversarial_check(self, outputs: dict[str, Any], criteria: list[str]):
+    def _run_adversarial_check(
+        self,
+        outputs: dict[str, Any],
+        criteria: list[str],
+        *,
+        task_context: Optional[dict[str, Any]] = None,
+        verification: Optional[dict[str, Any]] = None,
+        oracle_result: Optional[dict[str, Any]] = None,
+    ):
         import asyncio
 
-        return asyncio.run(self.adversarial.run(outputs, criteria))
+        return asyncio.run(
+            self.adversarial.run(
+                outputs,
+                criteria,
+                task_context=task_context or {},
+                verification=verification or {},
+                oracle_result=oracle_result or {},
+            )
+        )
 
     def _check_stopping_criteria(self, adversarial_report) -> bool:
         return adversarial_report.stopping_decision.should_stop
@@ -918,6 +1235,7 @@ class MetaHarnessLoop:
                         ],
                         compute_budget=str(item.get("compute_budget", config.compute_budget)),
                         model_parameter_count=int(item.get("model_parameter_count", 0)),
+                        command=item.get("command"),
                     )
                 )
             if proposals:
@@ -930,12 +1248,119 @@ class MetaHarnessLoop:
             ledger=ledger,
         )
 
+    def _task_for_stage(self, decomposition: Any, stage: str) -> Any:
+        stage_keywords = {
+            "survey": ("survey prior work", "literature"),
+            "oracle": ("oracle",),
+            "execute": ("controlled experiments", "run controlled experiments", "experiment"),
+            "verify": ("verify experiment outputs", "verification"),
+        }
+        tasks = getattr(decomposition, "tasks", []) or []
+        for task in tasks:
+            description = str(getattr(task, "description", "")).lower()
+            if any(token in description for token in stage_keywords.get(stage, ())):
+                return task
+        if stage == "execute":
+            for task in tasks:
+                if "paper" not in str(getattr(task, "description", "")).lower():
+                    return task
+        return tasks[0] if tasks else None
+
+    def _next_stage(self, current_stage: str) -> str:
+        try:
+            index = self.STAGE_SEQUENCE.index(current_stage)
+        except ValueError:
+            return self.STAGE_SEQUENCE[0]
+        return self.STAGE_SEQUENCE[min(index + 1, len(self.STAGE_SEQUENCE) - 1)]
+
+    def _stage_success(self, stage: str, result: dict[str, Any]) -> bool:
+        classification = str(result.get("classification", ""))
+        generated_artifacts = result.get("generated_artifacts", [])
+        if stage == "survey":
+            return classification in {"success", "plan_materialized"} and bool(generated_artifacts)
+        if stage == "execute":
+            return classification in {"success", "plan_materialized"} and bool(generated_artifacts)
+        return classification in {"success", "plan_materialized"}
+
+    def _ideation_required(self, *, failed_iterations: int, current_stage: str) -> bool:
+        return failed_iterations >= self.ADVERSARIAL_ITERATION_LIMIT and current_stage in {"survey", "execute", "verify"}
+
+    def _adversarial_task_context(self, task_node: Any, stage: str) -> dict[str, Any]:
+        return {
+            "task_id": getattr(task_node, "task_id", ""),
+            "task_description": getattr(task_node, "description", ""),
+            "stage": stage,
+            "success_metric": getattr(task_node, "success_metric", ""),
+            "acceptance_criteria": getattr(task_node, "acceptance_criteria", []),
+        }
+
+    def _format_adversarial_blockers(self, blockers: list[str]) -> str:
+        if not blockers:
+            return ""
+        return "Address adversarial blockers before advancing: " + "; ".join(blockers[:5])
+
+    def _latest_stage_result(self, project_dir: Path, stage: str) -> dict[str, Any] | None:
+        results: list[dict[str, Any]] = []
+        for result_path in sorted((project_dir / "runs").glob("*/result.json")):
+            payload = self.filesystem.read_json(result_path)
+            if str(payload.get("stage", "")) == stage:
+                results.append(payload)
+        return results[-1] if results else None
+
+    def _stage_report(self, stage: str, *, success: bool, reason: str) -> AdversarialReport:
+        report = AdversarialReport(
+            claim_flags=[],
+            literature_flags=[],
+            formal_checks=[CheckResult(name=f"{stage}_stage", passed=success, evidence=[reason])],
+            acceptance_ratio=1.0 if success else 0.0,
+            grounded_claims=1 if success else 0,
+            total_claims=1,
+            stopping_decision=StoppingDecision(
+                should_stop=False,
+                reasons=[f"{stage}:{'complete' if success else 'incomplete'}"],
+                critical_flags=[] if success else [reason or f"{stage}_incomplete"],
+            ),
+        )
+        return report
+
     def _update_causal_dag(self, dag_path: Path, project_id: str) -> None:
         dag = CausalDAG(dag_path)
-        dag.add_edge("instruction", "result", effect_size=1.0, confidence=0.9, experiment_ids=[project_id])
+        project_dir = self.filesystem.get_project_dir(project_id)
+        for result_path in sorted((project_dir / "runs").glob("*/result.json")):
+            payload = self.filesystem.read_json(result_path)
+            stage = str(payload.get("stage", "unknown"))
+            classification = str(payload.get("classification", "unknown"))
+            target = "verified_artifact" if classification == "success" else f"failure:{payload.get('failure_type') or classification}"
+            effect_size = float(payload.get("primary_metric", 0.0))
+            if classification != "success":
+                effect_size = -max(0.1, abs(effect_size) or 0.1)
+            confidence = 0.85 if classification == "success" else 0.6
+            try:
+                dag.add_edge(
+                    stage,
+                    target,
+                    effect_size=round(effect_size, 6),
+                    confidence=confidence,
+                    experiment_ids=[f"{project_id}:{result_path.parent.name}"],
+                )
+            except ValueError:
+                continue
 
-    def _requested_modules(self, *, config: ProjectConfig, task_node: Any, failed_iterations: int) -> list[str]:
-        modules = ["verification", "adversarial", "paper"]
+    def _requested_modules(
+        self,
+        *,
+        config: ProjectConfig,
+        task_node: Any,
+        failed_iterations: int,
+        current_stage: str = "execute",
+    ) -> list[str]:
+        modules = ["verification", "adversarial"]
+        if current_stage in {"survey", "execute"}:
+            modules.append("executor")
+        if current_stage == "oracle":
+            modules.append("oracle")
+        if current_stage == "verify":
+            modules.extend(["oracle", "verification"])
         if task_node and getattr(task_node, "requires_ml_optimizer", False):
             modules.append("optimizer")
         if failed_iterations >= self.ADVERSARIAL_ITERATION_LIMIT:
@@ -951,8 +1376,9 @@ class MetaHarnessLoop:
         run_n: int,
         failed_iterations: int,
         redirect_message: str,
+        current_stage: str,
     ) -> str:
-        context = f"Run {run_n} for {config.research_question}"
+        context = f"Run {run_n} stage={current_stage} for {config.research_question}"
         if redirect_message:
             context += f"\nRedirect: {redirect_message}"
         if failed_iterations >= self.ADVERSARIAL_ITERATION_LIMIT:
