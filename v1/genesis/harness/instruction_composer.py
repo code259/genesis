@@ -23,6 +23,11 @@ class InstructionComposer:
             f"- {module}"
             for module in (requested_modules or [])
         ] or ["- Let the coding agent choose the minimal required modules."]
+        adaptive_constraints = self._adaptive_constraints(
+            current_task_context=current_task_context,
+            retrieved_history=retrieved_history,
+            requested_modules=requested_modules or [],
+        )
         sections = [
             "# Objective",
             config.research_question,
@@ -48,6 +53,9 @@ class InstructionComposer:
             "# Requested Modules",
             *module_lines,
             "",
+            "# Adaptive Constraints",
+            *adaptive_constraints,
+            "",
             "# Explicit Next Action",
             current_task_context or "Continue the next highest-priority unresolved task.",
             "",
@@ -64,3 +72,23 @@ class InstructionComposer:
             "- Surface blockers explicitly.",
         ]
         return "\n".join(sections).strip() + "\n"
+
+    def _adaptive_constraints(
+        self,
+        *,
+        current_task_context: str,
+        retrieved_history: str,
+        requested_modules: list[str],
+    ) -> list[str]:
+        lines = ["- Prefer the smallest truthful next step that advances the active stage."]
+        lowered_history = retrieved_history.lower()
+        lowered_context = current_task_context.lower()
+        if "repeated failure signature" in lowered_history or "escalation" in lowered_context:
+            lines.append("- Diagnose the repeated failure before retrying the same tactic.")
+        if "verification_failures" in lowered_history or "verification" in lowered_context:
+            lines.append("- Address verification failures directly and explain how the next action changes the outcome.")
+        if "oracle" in requested_modules:
+            lines.append("- Do not rely on an oracle until it passes synthetic validation.")
+        if "ideation" in requested_modules:
+            lines.append("- Only propose ideation-driven pivots if the current path has materially stalled.")
+        return lines
