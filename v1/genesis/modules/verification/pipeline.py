@@ -30,8 +30,12 @@ class VerificationPipeline:
             result_payload = self._load_result(results_file)
             report["checks"].append({"name": "artifact_exists", "passed": True})
             report["checks"].append(self._substantive_artifact_check(result_payload))
+            drift_targets = self._implementation_targets(outputs_dir, result_payload)
             report["checks"].append(
-                self.formal.check_implementation_drift(results_file.read_text(encoding="utf-8"), results_file).to_dict()
+                self.formal.check_implementation_drift(
+                    str(result_payload.get("summary", "")),
+                    drift_targets,
+                ).to_dict()
             )
             report["checks"].append(self._metric_consistency_check(result_payload))
         else:
@@ -104,6 +108,27 @@ class VerificationPipeline:
                 f"has_code_path={has_code_path}",
             ],
         }
+
+    def _implementation_targets(self, outputs_dir: Path, payload: dict[str, Any]) -> list[Path]:
+        candidates: list[Path] = []
+        generated_artifacts = payload.get("generated_artifacts", [])
+        if isinstance(generated_artifacts, list):
+            for item in generated_artifacts:
+                if isinstance(item, str) and item.strip():
+                    candidates.append(Path(item))
+        code_path = str(payload.get("code_path", "")).strip()
+        if code_path:
+            candidates.append(Path(code_path))
+        if not candidates:
+            candidates.append(outputs_dir)
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            signature = str(candidate)
+            if signature not in seen:
+                deduped.append(candidate)
+                seen.add(signature)
+        return deduped
 
     def _is_setup_command(self, command: str) -> bool:
         lowered = command.strip().lower()
