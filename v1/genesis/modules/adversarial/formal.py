@@ -38,8 +38,8 @@ class FormalConsistencyChecker:
             score=claimed_metric,
         )
 
-    def check_implementation_drift(self, prose_methods: str, code_path: Union[str, Path]) -> CheckResult:
-        code = Path(code_path).read_text(encoding="utf-8") if Path(code_path).exists() else ""
+    def check_implementation_drift(self, prose_methods: str, code_path: Union[str, Path, list[Union[str, Path]]]) -> CheckResult:
+        code = self._load_code_text(code_path)
         prose_tokens = {token for token in prose_methods.lower().split() if len(token) > 3}
         code_tokens = {token for token in code.lower().split() if len(token) > 3}
         overlap = len(prose_tokens & code_tokens)
@@ -52,6 +52,20 @@ class FormalConsistencyChecker:
             evidence=[f"token_overlap={overlap}", f"overlap_ratio={overlap_ratio:.3f}"],
             score=float(overlap_ratio),
         )
+
+    def _load_code_text(self, code_path: Union[str, Path, list[Union[str, Path]]]) -> str:
+        if isinstance(code_path, list):
+            return "\n".join(self._load_code_text(item) for item in code_path)
+        path = Path(code_path)
+        if not path.exists():
+            return ""
+        if path.is_dir():
+            return "\n".join(
+                candidate.read_text(encoding="utf-8", errors="ignore")
+                for candidate in sorted(path.rglob("*"))
+                if candidate.is_file() and candidate.suffix in {".py", ".md", ".txt", ".json", ".tex", ".yaml", ".yml"}
+            )
+        return path.read_text(encoding="utf-8", errors="ignore")
 
     def run_oracle(self, oracle_path: Union[str, Path], outputs_dir: Union[str, Path]) -> OracleResult:
         module_path = Path(oracle_path)
