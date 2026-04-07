@@ -52,6 +52,41 @@ class CheckResult:
 
 
 @dataclass
+class CriteriaFinding:
+    criterion: str
+    passed: bool
+    severity: str = "medium"
+    rationale: str = ""
+    evidence_refs: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ClaimFinding:
+    claim: str
+    classification: str
+    rationale: str = ""
+    evidence_refs: list[str] = field(default_factory=list)
+    why_chain: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class LiteratureFinding:
+    claim: str
+    contradicted: bool
+    rationale: str = ""
+    evidence_refs: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class StoppingDecision:
     should_stop: bool
     reasons: list[str]
@@ -63,21 +98,47 @@ class StoppingDecision:
 
 @dataclass
 class AdversarialReport:
+    generated_criteria: list[str] = field(default_factory=list)
+    criteria_findings: list[CriteriaFinding] = field(default_factory=list)
+    claim_findings: list[ClaimFinding] = field(default_factory=list)
+    literature_findings: list[LiteratureFinding] = field(default_factory=list)
     claim_flags: list[str] = field(default_factory=list)
     literature_flags: list[str] = field(default_factory=list)
     formal_checks: list[CheckResult] = field(default_factory=list)
     acceptance_ratio: float = 0.0
     grounded_claims: int = 0
     total_claims: int = 0
+    critical_blockers: list[str] = field(default_factory=list)
+    iteration_count: int = 0
+    task_id: str = ""
+    stage: str = ""
     stopping_decision: StoppingDecision = field(
         default_factory=lambda: StoppingDecision(False, ["not evaluated"])
     )
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        payload["criteria_findings"] = [finding.to_dict() for finding in self.criteria_findings]
+        payload["claim_findings"] = [finding.to_dict() for finding in self.claim_findings]
+        payload["literature_findings"] = [finding.to_dict() for finding in self.literature_findings]
         payload["formal_checks"] = [check.to_dict() for check in self.formal_checks]
         payload["stopping_decision"] = self.stopping_decision.to_dict()
         return payload
+
+
+@dataclass
+class ManifoldHealth:
+    status: str
+    paper_count: int
+    has_embeddings: bool
+    has_latent_vectors: bool
+    has_density_scores: bool
+    citation_edge_count: int
+    ready_modes: list[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -107,6 +168,7 @@ class ExperimentProposal:
     expected_trajectory: list[float]
     compute_budget: str
     model_parameter_count: int = 0
+    command: Optional[Union[str, list[str]]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -143,6 +205,22 @@ class ScoredIdea:
 
     def to_dict(self) -> dict[str, Any]:
         return {"idea": self.idea.to_dict(), "score": self.score.to_dict()}
+
+
+@dataclass
+class IdeationResult:
+    status: str
+    health: ManifoldHealth
+    ideas: list[ScoredIdea] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "health": self.health.to_dict(),
+            "ideas": [idea.to_dict() for idea in self.ideas],
+            "reasons": list(self.reasons),
+        }
 
 
 @dataclass
