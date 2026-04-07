@@ -8,7 +8,7 @@ from pathlib import Path
 from statistics import mean, pstdev
 from typing import Any, Optional, Union
 
-from genesis.models import ensure_parent
+from genesis.models import ManifoldHealth, ensure_parent
 
 try:
     import chromadb
@@ -138,6 +138,52 @@ class ManifoldIndex:
             return self._all_from_collection("experiments")
         return self._load(self.experiments_path)
 
+    def assess_health(self) -> ManifoldHealth:
+        papers = self.all_papers()
+        paper_count = len(papers)
+        has_embeddings = any(bool(self._embedding_for(item)) for item in papers)
+        has_latent_vectors = any(bool(item.get("latent_z")) for item in papers if isinstance(item, dict))
+        has_density_scores = any(float(item.get("density_score", 0.0)) > 0.0 for item in papers if isinstance(item, dict))
+        citation_edge_count = sum(len(self._citations_for(item)) for item in papers if isinstance(item, dict))
+        reasons: list[str] = []
+        ready_modes: list[str] = []
+
+        if paper_count == 0:
+            reasons.append("papers_missing")
+        if not has_embeddings:
+            reasons.append("embeddings_missing")
+        if not has_latent_vectors:
+            reasons.append("latent_vectors_missing")
+        if not has_density_scores:
+            reasons.append("density_scores_missing")
+        if citation_edge_count == 0:
+            reasons.append("citation_edges_missing")
+
+        if paper_count > 0 and (has_embeddings or has_latent_vectors):
+            ready_modes.append("greedy")
+        if paper_count > 1 and has_density_scores:
+            ready_modes.append("low_density")
+        if paper_count > 1 and has_latent_vectors and citation_edge_count > 0:
+            ready_modes.append("pollination")
+
+        if paper_count == 0:
+            status = "empty"
+        elif len(ready_modes) == 3:
+            status = "ready"
+        else:
+            status = "degraded"
+
+        return ManifoldHealth(
+            status=status,
+            paper_count=paper_count,
+            has_embeddings=has_embeddings,
+            has_latent_vectors=has_latent_vectors,
+            has_density_scores=has_density_scores,
+            citation_edge_count=citation_edge_count,
+            ready_modes=ready_modes,
+            reasons=reasons,
+        )
+
     def attempted_sources(self) -> set[str]:
         attempted: set[str] = set()
         for experiment in self.all_experiments():
@@ -254,6 +300,14 @@ class ManifoldIndex:
     def _vector_for(self, item: dict[str, Any]) -> list[float]:
         vector = item.get("latent_z", item.get("embedding", []))
         return [float(value) for value in vector] if isinstance(vector, list) else []
+
+    def _embedding_for(self, item: dict[str, Any]) -> list[float]:
+        vector = item.get("embedding", [])
+        return [float(value) for value in vector] if isinstance(vector, list) else []
+
+    def _citations_for(self, item: dict[str, Any]) -> list[Any]:
+        citations = item.get("citations", [])
+        return citations if isinstance(citations, list) else []
 
     def _normalize_item(self, item: dict[str, Any], *, collection: str) -> dict[str, Any]:
         normalized = dict(item)
