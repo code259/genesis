@@ -30,10 +30,19 @@ class TokenBudget:
         return self._estimate_tokens(content) > layer_budget
 
     def trim_to_budget(self, content: str, layer_budget: int) -> str:
-        words = content.split()
-        while words and self._estimate_tokens(" ".join(words)) > layer_budget:
-            words = words[:- max(1, len(words) // 10)]
-        return " ".join(words)
+        blocks = [block for block in content.split("\n\n") if block.strip()]
+        if not blocks:
+            return content
+        kept = list(blocks)
+        while kept and self._estimate_tokens("\n\n".join(kept)) > layer_budget:
+            kept.pop()
+        trimmed = "\n\n".join(kept).strip()
+        if trimmed:
+            return trimmed
+        lines = [line for line in content.splitlines() if line.strip()]
+        while lines and self._estimate_tokens("\n".join(lines)) > layer_budget:
+            lines.pop()
+        return "\n".join(lines)
 
     def _estimate_tokens(self, content: str) -> int:
         return max(1, len(content) // 4)
