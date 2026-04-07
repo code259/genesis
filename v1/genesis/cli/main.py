@@ -11,6 +11,7 @@ import click
 from genesis.config import load_project_config
 from genesis.harness.loop import MetaHarnessLoop
 from genesis.storage.filesystem import ProjectFilesystem
+from genesis.storage.manifold import ManifoldIndex
 
 
 INTERVENTION_TYPES = ["REDIRECT", "APPROVE", "REJECT", "STOP"]
@@ -88,13 +89,31 @@ def run_project(project_id: Optional[str], spec_path: Path, max_runs: int, runti
     show_default=True,
 )
 @click.option("--probe-models", is_flag=True, default=False, help="Run a minimal probe against configured model routes.")
-def doctor(runtime_config: Path, probe_models: bool) -> None:
+@click.option("--manifold-root", type=click.Path(path_type=Path), default=Path("manifold_index"), show_default=True)
+def doctor(runtime_config: Path, probe_models: bool, manifold_root: Path) -> None:
     runtime = MetaHarnessLoop(
         projects_root=Path("projects"),
         taste_root=Path("taste_db"),
         runtime_config_path=runtime_config,
     ).agent_runtime
-    _echo_json(runtime.check_health(probe_models=probe_models))
+    payload = runtime.check_health(probe_models=probe_models)
+    if manifold_root.exists():
+        health = ManifoldIndex(manifold_root).assess_health()
+        payload["manifold_health"] = health.to_dict()
+        payload["passed"] = bool(payload.get("passed")) and health.status != "empty"
+    else:
+        payload["manifold_health"] = {
+            "status": "missing",
+            "paper_count": 0,
+            "has_embeddings": False,
+            "has_latent_vectors": False,
+            "has_density_scores": False,
+            "citation_edge_count": 0,
+            "ready_modes": [],
+            "reasons": ["manifold_root_missing"],
+        }
+        payload["passed"] = False
+    _echo_json(payload)
 
 
 @main.command("status")
@@ -149,10 +168,16 @@ def results(project_id: str, root_dir: Path) -> None:
 
 @main.command("build-manifold")
 @click.option("--domain", required=True)
-def build_manifold(domain: str) -> None:
+@click.option("--input", "input_path", type=click.Path(path_type=Path), default=None)
+@click.option("--limit", type=int, default=25, show_default=True)
+@click.option("--root", "root_dir", type=click.Path(path_type=Path), default=Path("manifold_index"), show_default=True)
+def build_manifold(domain: str, input_path: Optional[Path], limit: int, root_dir: Path) -> None:
     repo_root = Path(__file__).resolve().parents[2]
+    command = ["python3", "scripts/build_manifold.py", "--domain", domain, "--limit", str(limit), "--root", str(root_dir)]
+    if input_path is not None:
+        command.extend(["--input", str(input_path)])
     result = subprocess.run(
-        ["python3", "scripts/build_manifold.py", "--domain", domain],
+        command,
         cwd=repo_root,
         capture_output=True,
         text=True,

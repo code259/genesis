@@ -207,3 +207,33 @@ def test_manifold_health_reports_missing_prereqs(tmp_path):
     health = manifold.assess_health()
     assert health.status == "empty"
     assert "papers_missing" in health.reasons
+
+
+def test_manifold_health_reports_ready_modes(tmp_path):
+    manifold = ManifoldIndex(tmp_path / "manifold")
+    manifold.upsert_collection(
+        [
+            {
+                "paper_id": "paper-1",
+                "title": "Paper 1",
+                "abstract": "A",
+                "embedding": [1.0, 0.0],
+                "latent_z": [1.0, 0.0],
+                "density_score": 0.4,
+                "citations": [{"paper_id": "paper-2"}],
+            },
+            {
+                "paper_id": "paper-2",
+                "title": "Paper 2",
+                "abstract": "B",
+                "embedding": [0.0, 1.0],
+                "latent_z": [0.0, 1.0],
+                "density_score": 0.6,
+                "citations": [],
+            },
+        ],
+        collection="papers",
+    )
+    health = manifold.assess_health()
+    assert health.status in {"ready", "degraded"}
+    assert "greedy" in health.ready_modes
