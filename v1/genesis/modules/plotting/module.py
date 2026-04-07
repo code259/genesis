@@ -54,8 +54,8 @@ class PlottingModule:
             image = ax.imshow(matrix, aspect="auto", cmap="viridis")
             fig.colorbar(image, ax=ax)
         else:
-            self._validate_xy(x_values, y_values)
-            ax.plot(x_values, y_values, linewidth=2.0, marker="o")
+            plt.close(fig)
+            raise ValueError(f"unsupported figure_type: {figure_type}")
 
         if spec.axis_labels:
             ax.set_xlabel(spec.axis_labels[0] if len(spec.axis_labels) > 0 else "")

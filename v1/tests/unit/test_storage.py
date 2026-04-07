@@ -81,6 +81,15 @@ def test_causal_dag_merge_dedupes_edges(tmp_path):
     assert len(dag.get_edges_from("a")) == 1
 
 
+def test_causal_dag_top_edges_for_target_filters_domain(tmp_path):
+    dag = CausalDAG(tmp_path / "dag.json")
+    dag.add_edge("learning_rate=0.1", "metric:task-1", effect_size=0.2, confidence=0.9, experiment_ids=["1"], domain="ml_efficiency")
+    dag.add_edge("warmup_ratio=0.3", "metric:task-1", effect_size=0.1, confidence=0.85, experiment_ids=["2"], domain="astrophysics")
+    edges = dag.top_edges_for_target("metric:task-1", domain="ml_efficiency")
+    assert len(edges) == 1
+    assert edges[0]["source"] == "learning_rate=0.1"
+
+
 def test_taste_persistence_dedupes_project_data(tmp_path):
     persistence = TasteModelPersistence(tmp_path / "taste_db")
     persistence.merge_project_data(

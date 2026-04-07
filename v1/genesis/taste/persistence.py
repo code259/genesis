@@ -42,6 +42,8 @@ class TasteModelPersistence:
         for experiment in experiments:
             if not isinstance(experiment, dict):
                 continue
+            if not self._is_verified_real_experiment(experiment):
+                continue
             experiment_id = experiment.get("experiment_id")
             if experiment_id:
                 indexed[experiment_id] = {
@@ -50,3 +52,17 @@ class TasteModelPersistence:
                 }
         merged = list(indexed.values())
         self.dataset_path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+
+    def _is_verified_real_experiment(self, experiment: dict[str, Any]) -> bool:
+        if "status" not in experiment and "trajectory" not in experiment and "artifact_path" not in experiment:
+            return True
+        status = str(experiment.get("status", "")).lower()
+        artifact_path = str(experiment.get("artifact_path", "")).lower()
+        trajectory = experiment.get("trajectory", [])
+        if status not in {"keep", "success"}:
+            return False
+        if not artifact_path or artifact_path.endswith(("stderr.log", "missing_command.txt", "missing_output.txt")):
+            return False
+        if not isinstance(trajectory, list) or not trajectory:
+            return False
+        return True

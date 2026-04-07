@@ -8,10 +8,13 @@ from genesis.modules.ideation.pollination import PollinationSearch
 from genesis.modules.optimizer.oracle_resolver import OracleResolver
 from genesis.modules.optimizer.parallel import ParallelExperimentManager
 from genesis.modules.optimizer.proposer import ExperimentProposer
+from genesis.modules.optimizer.runner import ExperimentRunner
 from genesis.storage.ledger import ExperimentLedger
+from genesis.storage.causal_dag import CausalDAG
 from genesis.storage.manifold import ManifoldIndex
 from genesis.taste.features import ExperimentFeatureExtractor
 from genesis.taste.gp_model import TasteGP
+from genesis.taste.persistence import TasteModelPersistence
 from genesis.config import ProjectConfig
 from genesis.models import TaskNode
 
@@ -34,18 +37,13 @@ def test_parallel_experiment_manager_runs_and_preserves_order(tmp_path):
             {
                 "experiment_id": "exp1",
                 "task_id": "task",
-                "task_type": "ml_efficiency",
-                "learning_rate": 0.12,
-                "warmup_ratio": 0.25,
-                "steps": 8,
+                "command": ["python3", "-c", "import json; open('result.json','w').write(json.dumps({'primary_metric':0.6,'trajectory':[0.2,0.4,0.6]}))"],
                 "expected_trajectory": [0.2, 0.4, 0.6],
             },
             {
                 "experiment_id": "exp2",
                 "task_id": "task",
-                "task_type": "analysis",
-                "scale": 0.9,
-                "steps": 6,
+                "command": ["python3", "-c", "import json; open('result.json','w').write(json.dumps({'primary_metric':0.3,'trajectory':[0.1,0.2,0.3]}))"],
                 "expected_trajectory": [0.1, 0.2, 0.3],
             },
         ],
@@ -54,6 +52,13 @@ def test_parallel_experiment_manager_runs_and_preserves_order(tmp_path):
     assert [result.experiment_id for result in results] == ["exp1", "exp2"]
     assert all(result.trajectory for result in results)
     assert all(Path(result.artifact_path).exists() for result in results)
+
+
+def test_experiment_runner_requires_real_command(tmp_path):
+    runner = ExperimentRunner(tmp_path / "sandboxes")
+    result = runner.run("task", {"experiment_id": "exp1", "expected_trajectory": [0.1, 0.2]})
+    assert result.status == "crash"
+    assert "did not provide a runnable command" in Path(result.artifact_path).read_text(encoding="utf-8")
 
 
 def test_experiment_proposer_uses_ledger_history(tmp_path):
@@ -75,10 +80,13 @@ def test_experiment_proposer_uses_ledger_history(tmp_path):
         ),
         timestamp="2026-04-04T00:00:00Z",
     )
-    proposals = ExperimentProposer().propose_next("task-1", n=2, ledger=ledger)
+    dag = CausalDAG(tmp_path / "dag.json")
+    dag.add_edge("learning_rate=0.08", "metric:task-1", effect_size=0.2, confidence=0.9, experiment_ids=["exp-1"], domain="ml_efficiency")
+    proposals = ExperimentProposer().propose_next("task-1", n=2, ledger=ledger, causal_dag=dag, domain="ml_efficiency")
     assert len(proposals) == 2
     assert proposals[0].expected_metric >= 0.72
-    assert "stabilization" in proposals[0].description.lower()
+    assert "causal" in proposals[0].description.lower() or "stabilization" in proposals[0].description.lower()
+    assert "learning_rate=0.08" in proposals[0].code_diff
 
 
 def test_feature_extractor_gp_and_persistence_shape(tmp_path):
@@ -101,6 +109,47 @@ def test_feature_extractor_gp_and_persistence_shape(tmp_path):
     means, _ = restored.predict(features[2:])
     assert len(means) == 2
     assert model.backend in {"scipy", "gpytorch"}
+
+
+def test_taste_gp_uses_nearest_neighbor_before_enough_points():
+    model = TasteGP()
+    x = [[0.0, 0.0], [10.0, 10.0]]
+    y = [0.2, 0.9]
+    model.fit(x, y, [[0.2], [0.9]])
+    means, variances = model.predict([[9.5, 9.5]])
+    assert means[0] == 0.9
+    assert variances[0] > 0.0
+
+
+def test_taste_persistence_merges_only_verified_real_outcomes(tmp_path):
+    persistence = TasteModelPersistence(tmp_path / "taste_db")
+    persistence.merge_project_data(
+        "proj",
+        [
+            {
+                "experiment_id": "good",
+                "status": "keep",
+                "artifact_path": str(tmp_path / "result.json"),
+                "trajectory": [0.1, 0.2],
+            },
+            {
+                "experiment_id": "bad-missing-command",
+                "status": "keep",
+                "artifact_path": str(tmp_path / "missing_command.txt"),
+                "trajectory": [0.1, 0.2],
+            },
+            {
+                "experiment_id": "bad-crash",
+                "status": "crash",
+                "artifact_path": str(tmp_path / "stderr.log"),
+                "trajectory": [0.1],
+            },
+        ],
+    )
+    merged = persistence.dataset_path.read_text(encoding="utf-8")
+    assert "good" in merged
+    assert "bad-missing-command" not in merged
+    assert "bad-crash" not in merged
 
 
 def test_oracle_resolver_and_ideation_orchestrator(tmp_path):
@@ -201,3 +250,33 @@ def test_manifold_health_reports_missing_prereqs(tmp_path):
     health = manifold.assess_health()
     assert health.status == "empty"
     assert "papers_missing" in health.reasons
+
+
+def test_manifold_health_reports_ready_modes(tmp_path):
+    manifold = ManifoldIndex(tmp_path / "manifold")
+    manifold.upsert_collection(
+        [
+            {
+                "paper_id": "paper-1",
+                "title": "Paper 1",
+                "abstract": "A",
+                "embedding": [1.0, 0.0],
+                "latent_z": [1.0, 0.0],
+                "density_score": 0.4,
+                "citations": [{"paper_id": "paper-2"}],
+            },
+            {
+                "paper_id": "paper-2",
+                "title": "Paper 2",
+                "abstract": "B",
+                "embedding": [0.0, 1.0],
+                "latent_z": [0.0, 1.0],
+                "density_score": 0.6,
+                "citations": [],
+            },
+        ],
+        collection="papers",
+    )
+    health = manifold.assess_health()
+    assert health.status in {"ready", "degraded"}
+    assert "greedy" in health.ready_modes

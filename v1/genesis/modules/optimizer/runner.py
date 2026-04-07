@@ -34,6 +34,22 @@ class ExperimentRunner:
         plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
         artifact_path = sandbox_dir / "result.json"
         command = self._resolve_command(plan, plan_path, artifact_path)
+        if command is None:
+            missing_command = sandbox_dir / "missing_command.txt"
+            missing_command.write_text("experiment plan did not provide a runnable command", encoding="utf-8")
+            return ExperimentResult(
+                experiment_id=experiment_id,
+                task_id=task_id,
+                primary_metric=0.0,
+                secondary_metrics={"missing_command": 1.0},
+                trajectory=[],
+                peak_memory=0.0,
+                runtime_seconds=time.time() - started,
+                status="crash",
+                code_hash=self._code_hash(plan),
+                artifact_path=str(missing_command),
+                anomaly_score=self._trajectory_anomaly_score([], plan.get("expected_trajectory", [])),
+            )
         process = subprocess.run(
             command,
             cwd=sandbox_dir,
@@ -135,17 +151,13 @@ class ExperimentRunner:
         plan.setdefault("keep_threshold", float(plan.get("keep_threshold", 0.4)))
         return plan
 
-    def _resolve_command(self, plan: dict[str, Any], plan_path: Path, artifact_path: Path) -> list[str]:
+    def _resolve_command(self, plan: dict[str, Any], plan_path: Path, artifact_path: Path) -> list[str] | None:
         command = plan.get("command")
         if isinstance(command, str) and command.strip():
             return shlex.split(command)
         if isinstance(command, list) and all(isinstance(part, str) for part in command):
             return list(command)
-        return self._default_command(plan_path, artifact_path)
-
-    def _default_command(self, plan_path: Path, artifact_path: Path) -> list[str]:
-        script_path = Path(__file__).resolve().parents[3] / "scripts" / "run_experiment.py"
-        return ["python3", str(script_path), "--plan", str(plan_path), "--output", str(artifact_path)]
+        return None
 
     def _normalize_trajectory(self, values: Any) -> list[float]:
         if not isinstance(values, list):
