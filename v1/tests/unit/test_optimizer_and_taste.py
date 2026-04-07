@@ -14,6 +14,7 @@ from genesis.storage.causal_dag import CausalDAG
 from genesis.storage.manifold import ManifoldIndex
 from genesis.taste.features import ExperimentFeatureExtractor
 from genesis.taste.gp_model import TasteGP
+from genesis.taste.persistence import TasteModelPersistence
 from genesis.config import ProjectConfig
 from genesis.models import TaskNode
 
@@ -107,6 +108,47 @@ def test_feature_extractor_gp_and_persistence_shape(tmp_path):
     means, _ = restored.predict(features[2:])
     assert len(means) == 2
     assert model.backend in {"scipy", "gpytorch"}
+
+
+def test_taste_gp_uses_nearest_neighbor_before_enough_points():
+    model = TasteGP()
+    x = [[0.0, 0.0], [10.0, 10.0]]
+    y = [0.2, 0.9]
+    model.fit(x, y, [[0.2], [0.9]])
+    means, variances = model.predict([[9.5, 9.5]])
+    assert means[0] == 0.9
+    assert variances[0] > 0.0
+
+
+def test_taste_persistence_merges_only_verified_real_outcomes(tmp_path):
+    persistence = TasteModelPersistence(tmp_path / "taste_db")
+    persistence.merge_project_data(
+        "proj",
+        [
+            {
+                "experiment_id": "good",
+                "status": "keep",
+                "artifact_path": str(tmp_path / "result.json"),
+                "trajectory": [0.1, 0.2],
+            },
+            {
+                "experiment_id": "bad-missing-command",
+                "status": "keep",
+                "artifact_path": str(tmp_path / "missing_command.txt"),
+                "trajectory": [0.1, 0.2],
+            },
+            {
+                "experiment_id": "bad-crash",
+                "status": "crash",
+                "artifact_path": str(tmp_path / "stderr.log"),
+                "trajectory": [0.1],
+            },
+        ],
+    )
+    merged = persistence.dataset_path.read_text(encoding="utf-8")
+    assert "good" in merged
+    assert "bad-missing-command" not in merged
+    assert "bad-crash" not in merged
 
 
 def test_oracle_resolver_and_ideation_orchestrator(tmp_path):

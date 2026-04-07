@@ -821,11 +821,20 @@ class MetaHarnessLoop:
                     timestamp=f"run-{run_n}",
                 )
             if taste_model:
-                taste_model.fit(
-                    [self.feature_extractor.extract(proposal) for proposal in proposals],
-                    [result.primary_metric for result in experiment_results],
-                    [result.trajectory for result in experiment_results],
-                )
+                training_examples = [
+                    (proposal, result)
+                    for proposal, result in zip(proposals, experiment_results)
+                    if proposal.command
+                    and str(result.status).lower() in {"keep", "success"}
+                    and bool(result.trajectory)
+                    and not str(result.artifact_path).lower().endswith(("stderr.log", "missing_command.txt", "missing_output.txt"))
+                ]
+                if training_examples:
+                    taste_model.fit(
+                        [self.feature_extractor.extract(proposal) for proposal, _ in training_examples],
+                        [result.primary_metric for _, result in training_examples],
+                        [result.trajectory for _, result in training_examples],
+                    )
             summary_parts.append(
                 f"Optimizer ran {len(experiment_results)} experiments for metric {oracle_spec.metric_name} and kept {best.experiment_id}."
             )

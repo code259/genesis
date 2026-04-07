@@ -15,6 +15,8 @@ except Exception:  # pragma: no cover - optional backend
 
 
 class TasteGP:
+    MIN_POINTS_FOR_GP = 20
+
     def __init__(
         self,
         *,
@@ -85,6 +87,8 @@ class TasteGP:
         self._trajectory_alpha = cho_solve(self._trajectory_factor, centered_trajectory_matrix, check_finite=False)
 
     def predict(self, X: list[list[float]]) -> tuple[list[float], list[float]]:
+        if len(self.training_targets) < self.MIN_POINTS_FOR_GP:
+            return self._predict_nearest_neighbor(X)
         if self.backend == "gpytorch" and hasattr(self, "_gpytorch_state"):
             return self._predict_gpytorch(X)
         if self._X is None or self._target_factor is None or self._target_alpha is None:
@@ -101,6 +105,9 @@ class TasteGP:
         return means.tolist(), variances
 
     def predict_trajectory(self, X: list[list[float]]) -> tuple[list[list[float]], list[list[float]]]:
+        if len(self.training_targets) < self.MIN_POINTS_FOR_GP:
+            means, variances = self._predict_nearest_neighbor(X)
+            return [[mean] for mean in means], [[variance] for variance in variances]
         if self.backend == "gpytorch" and hasattr(self, "_gpytorch_state"):
             means, variances = self._predict_gpytorch(X)
             return [[mean] for mean in means], [[variance] for variance in variances]
@@ -237,3 +244,17 @@ class TasteGP:
         means = prediction.mean + state["y_mean"]
         variances = prediction.variance
         return means.tolist(), variances.tolist()
+
+    def _predict_nearest_neighbor(self, X: list[list[float]]) -> tuple[list[float], list[float]]:
+        if not self.training_inputs or not self.training_targets:
+            return [0.0 for _ in X], [1.0 for _ in X]
+        train = np.asarray(self.training_inputs, dtype=float)
+        query = np.asarray(X, dtype=float)
+        means: list[float] = []
+        variances: list[float] = []
+        for row in query:
+            distances = np.linalg.norm(train - row, axis=1)
+            nearest_idx = int(np.argmin(distances))
+            means.append(float(self.training_targets[nearest_idx]))
+            variances.append(float(max(0.01, distances[nearest_idx] ** 2)))
+        return means, variances
