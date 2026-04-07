@@ -61,13 +61,40 @@ def init_project(spec_path: Optional[Path], interactive: bool, project_id: Optio
 @click.option("--project-id", required=False)
 @click.option("--spec", "spec_path", type=click.Path(exists=True, path_type=Path), required=True)
 @click.option("--max-runs", default=50, show_default=True, type=int)
-def run_project(project_id: Optional[str], spec_path: Path, max_runs: int) -> None:
+@click.option(
+    "--runtime-config",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path(__file__).resolve().parents[2] / "configs" / "runtime_omo.jsonc",
+    show_default=True,
+)
+def run_project(project_id: Optional[str], spec_path: Path, max_runs: int, runtime_config: Path) -> None:
     config = load_project_config(spec_path)
     project_id = project_id or uuid.uuid4().hex[:8]
     output_root = Path(config.output_dir)
-    loop = MetaHarnessLoop(projects_root=output_root, taste_root=output_root.parent / "taste_db")
+    loop = MetaHarnessLoop(
+        projects_root=output_root,
+        taste_root=output_root.parent / "taste_db",
+        runtime_config_path=runtime_config,
+    )
     result = loop.run(project_id, config, max_runs=max_runs)
     _echo_json(result.to_dict())
+
+
+@main.command("doctor")
+@click.option(
+    "--runtime-config",
+    type=click.Path(exists=True, path_type=Path),
+    default=Path(__file__).resolve().parents[2] / "configs" / "runtime_omo.jsonc",
+    show_default=True,
+)
+@click.option("--probe-models", is_flag=True, default=False, help="Run a minimal probe against configured model routes.")
+def doctor(runtime_config: Path, probe_models: bool) -> None:
+    runtime = MetaHarnessLoop(
+        projects_root=Path("projects"),
+        taste_root=Path("taste_db"),
+        runtime_config_path=runtime_config,
+    ).agent_runtime
+    _echo_json(runtime.check_health(probe_models=probe_models))
 
 
 @main.command("status")
