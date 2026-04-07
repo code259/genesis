@@ -119,6 +119,9 @@ class MetaHarnessLoop:
         manifold_health = manifold.assess_health()
         ideation_available = bool(manifold_health.ready_modes)
         self.filesystem.write_json(project_dir / "knowledge" / "manifold_health.json", manifold_health.to_dict())
+        global_dag_path = self.taste_persistence.root_dir / "causal_dag_global.json"
+        if global_dag_path.exists():
+            CausalDAG(project_dir / "causal_dag.json").merge_global_dag(self.filesystem.read_json(global_dag_path))
         optimizer = ParallelExperimentManager(project_dir / "runtime" / "sandboxes")
         ideation = IdeationOrchestrator(
             greedy=GreedyAdjacencySearch(manifold),
@@ -656,7 +659,7 @@ class MetaHarnessLoop:
             completion_reason=result_summary,
             project_status=project_status,
         )
-        self._update_causal_dag(project_dir / "causal_dag.json", project_id, config.domain)
+        self._update_causal_dag(project_dir / "causal_dag.json", project_id, config.domain, verified_experiments)
         self.taste_persistence.save_after_project(project_id, taste_model)
         verified_experiments = [
             experiment
@@ -1596,10 +1599,35 @@ class MetaHarnessLoop:
         )
         return report
 
-    def _update_causal_dag(self, dag_path: Path, project_id: str, domain: str) -> None:
+    def _update_causal_dag(self, dag_path: Path, project_id: str, domain: str, verified_experiments: list[dict[str, Any]]) -> None:
         dag = CausalDAG(dag_path)
         global_dag = CausalDAG(self.taste_persistence.root_dir / "causal_dag_global.json")
         project_dir = self.filesystem.get_project_dir(project_id)
+        for experiment in verified_experiments:
+            task_id = str(experiment.get("task_id", "")).strip()
+            target = f"metric:{task_id}" if task_id else "metric:unknown"
+            config_diff = str(experiment.get("config_diff", "")).strip()
+            trajectory_summary = experiment.get("trajectory_summary", {}) if isinstance(experiment.get("trajectory_summary", {}), dict) else {}
+            effect_size = float(experiment.get("secondary_metrics", {}).get("improvement", 0.0))
+            if effect_size == 0.0:
+                start = trajectory_summary.get("start")
+                end = trajectory_summary.get("end")
+                if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+                    effect_size = float(end) - float(start)
+            confidence = 0.9 if float(experiment.get("anomaly_score", 0.0)) < 0.5 else 0.75
+            features = [part.strip() for part in config_diff.split(";") if part.strip()]
+            for feature in features:
+                try:
+                    dag.add_edge(
+                        feature,
+                        target,
+                        effect_size=round(effect_size, 6),
+                        confidence=confidence,
+                        experiment_ids=[str(experiment.get("experiment_id", ""))],
+                        domain=domain,
+                    )
+                except ValueError:
+                    continue
         for result_path in sorted((project_dir / "runs").glob("*/result.json")):
             payload = self.filesystem.read_json(result_path)
             stage = str(payload.get("stage", "unknown"))

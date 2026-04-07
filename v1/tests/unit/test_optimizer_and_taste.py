@@ -81,11 +81,12 @@ def test_experiment_proposer_uses_ledger_history(tmp_path):
         timestamp="2026-04-04T00:00:00Z",
     )
     dag = CausalDAG(tmp_path / "dag.json")
-    dag.add_edge("learning_rate", "metric", effect_size=0.2, confidence=0.9, experiment_ids=["exp-1"], domain="ml_efficiency")
+    dag.add_edge("learning_rate=0.08", "metric:task-1", effect_size=0.2, confidence=0.9, experiment_ids=["exp-1"], domain="ml_efficiency")
     proposals = ExperimentProposer().propose_next("task-1", n=2, ledger=ledger, causal_dag=dag, domain="ml_efficiency")
     assert len(proposals) == 2
     assert proposals[0].expected_metric >= 0.72
     assert "causal" in proposals[0].description.lower() or "stabilization" in proposals[0].description.lower()
+    assert "learning_rate=0.08" in proposals[0].code_diff
 
 
 def test_feature_extractor_gp_and_persistence_shape(tmp_path):
