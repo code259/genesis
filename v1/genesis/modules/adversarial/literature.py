@@ -9,7 +9,9 @@ from typing import Any, Optional
 
 import requests
 
+from genesis.models import LiteratureFinding
 from genesis.scholarly import ScholarlyClient
+from .runtime import AdversarialRuntime
 
 
 @dataclass
@@ -25,9 +27,10 @@ class VerificationResult:
 
 
 class LiteratureCrossExaminer:
-    def __init__(self, session: Optional[requests.Session] = None):
+    def __init__(self, session: Optional[requests.Session] = None, runtime: AdversarialRuntime | None = None):
         self.session = session or requests.Session()
         self.api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
+        self.runtime = runtime or AdversarialRuntime(session=self.session)
         cache_root = Path(os.getenv("GENESIS_CACHE_ROOT", Path(tempfile.gettempdir()) / "genesis-cache"))
         cache_path = os.getenv("GENESIS_CITATIONS_CACHE", str(cache_root / "literature_cache.json"))
         self.client = ScholarlyClient(
@@ -97,6 +100,33 @@ class LiteratureCrossExaminer:
             verified = False
         return VerificationResult(claim=claim.text, verified=verified, evidence=evidence)
 
+    def analyze_claim(self, claim: str) -> LiteratureFinding:
+        factual = FactualClaim(claim)
+        candidates = self._retrieve_candidates(factual)
+        if not candidates:
+            return LiteratureFinding(
+                claim=claim,
+                contradicted=False,
+                rationale="No literature candidates were found for contradiction analysis.",
+                evidence_refs=[],
+            )
+        try:
+            payload = self.runtime.analyze_literature(claim=claim, search_results=candidates[:5])
+            return LiteratureFinding(
+                claim=claim,
+                contradicted=bool(payload.get("contradicted", False)),
+                rationale=str(payload.get("rationale", "")).strip(),
+                evidence_refs=[str(ref) for ref in payload.get("evidence_refs", []) if str(ref).strip()],
+            )
+        except Exception:  # noqa: BLE001
+            contradictions = self.check_for_contradictions(factual, candidates)
+            return LiteratureFinding(
+                claim=claim,
+                contradicted=bool(contradictions),
+                rationale="Fallback contradiction analysis used deterministic heuristics.",
+                evidence_refs=contradictions,
+            )
+
     def check_for_contradictions(self, claim: FactualClaim, search_results: list[dict[str, Any]]) -> list[str]:
         contradictions: set[str] = set()
         claim_text = claim.text.lower()
@@ -107,3 +137,19 @@ class LiteratureCrossExaminer:
             if any(term in claim_text for term in ("impossible", "guaranteed", "always")) and "limited" in snippet:
                 contradictions.add("METHODOLOGY_UNSUPPORTED")
         return sorted(contradictions)
+
+    def _retrieve_candidates(self, claim: FactualClaim) -> list[dict[str, Any]]:
+        doi_match = re.search(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", claim.text, re.IGNORECASE)
+        candidates: list[dict[str, Any]] = []
+        if doi_match:
+            paper = self.client.get_paper(f"DOI:{doi_match.group(0)}")
+            if paper:
+                candidates.append(paper)
+        if not candidates:
+            cleaned_query = re.sub(r"\s+", " ", claim.text.strip().rstrip("."))
+            candidates = self.client.search_semantic_scholar(cleaned_query, limit=5)
+        if not candidates:
+            title_match = re.search(r'"([^"]+)"', claim.text)
+            if title_match:
+                candidates = self.client.search_title(title_match.group(1))
+        return candidates
