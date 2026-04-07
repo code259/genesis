@@ -72,5 +72,12 @@ class SelectiveHistoryReader:
                 if failure_summary:
                     line += f" | {failure_summary}"
                 failure_lines.append(line)
+        for report_path in sorted(self.filesystem.get_project_dir(project_id).glob("runs/*/adversarial_report.json"), reverse=True)[:3]:
+            payload = self.filesystem.read_json(report_path)
+            blockers = payload.get("critical_blockers", [])
+            if blockers:
+                failure_lines.append(
+                    f"- adversarial blockers run {report_path.parent.name}: {', '.join(str(blocker) for blocker in blockers[:3])}"
+                )
         lines = progress_lines + failure_lines
         return self.token_budget.trim_to_budget("\n".join(lines), layer_budget=1200)
