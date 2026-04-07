@@ -28,7 +28,7 @@ class ProjectFilesystem:
         if not (project_dir / "project_state.json").exists():
             self.write_json(
                 project_dir / "project_state.json",
-                {"status": "initialized", "run_count": 0, "last_run_status": None},
+                {"status": "initialized", "run_count": 0, "current_stage": "survey", "last_run_status": None},
             )
         return project_dir
 
@@ -107,5 +107,5 @@ class ProjectFilesystem:
     def read_project_state(self, project_id: str) -> dict[str, Any]:
         path = self.get_project_dir(project_id) / "project_state.json"
         if not path.exists():
-            return {"status": "unknown", "run_count": 0, "last_run_status": None}
+            return {"status": "unknown", "run_count": 0, "current_stage": "survey", "last_run_status": None}
         return self.read_json(path)
