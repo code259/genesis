@@ -36,6 +36,38 @@ def test_instruction_composer_has_sections():
     assert "# Budget" in instruction
     assert "# Requested Modules" in instruction
     assert "# Validation Expectations" in instruction
+    assert "# Risk Focus" in instruction
+    assert "# Blocking Findings" in instruction
+
+
+def test_instruction_composer_adapts_to_blockers_and_verification():
+    composer = InstructionComposer()
+    config = ProjectConfig(
+        research_question="Repair the pipeline",
+        domain="general",
+        compute_budget="local_cpu",
+        time_budget_hours=1,
+        domain_knowledge_model="none",
+        output_dir="projects",
+    )
+    instruction = composer.compose(
+        config=config,
+        belief_summary="tracked_experiments=4",
+        retrieved_history=(
+            "- failed task-1: command_failure | import error\n"
+            "- adversarial blockers run 3: unsupported_claim:benchmark gain, criterion_failed:verification\n"
+            "verification_failures=['oracle_gate']\n"
+            "Repeated failure signature (3x): import error\n"
+            "ideation_available=False\n"
+        ),
+        current_task_context="Fix the execute-stage blocker.",
+        requested_modules=["verification", "oracle", "ideation", "optimizer"],
+        domain_context="Some domain context.",
+    )
+    assert "Resolve the latest adversarial blockers" in instruction
+    assert "Repair the failing verification path" in instruction or "Repair the failing verification" in instruction
+    assert "Do not request ideation-dependent pivots until manifold availability is restored." in instruction
+    assert "Use runnable experiment commands" in instruction
 
 
 def test_decomposer_builds_task_tree():
