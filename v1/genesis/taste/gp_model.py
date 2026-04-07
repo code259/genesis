@@ -21,7 +21,7 @@ class TasteGP:
         noise: float = 1e-5,
         rbf_length_scale: float = 1.5,
         matern_length_scale: float = 1.0,
-        structured_dims: int = 3,
+        structured_dims: int = 8,
     ) -> None:
         self.noise = noise
         self.rbf_length_scale = rbf_length_scale
