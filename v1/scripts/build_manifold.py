@@ -85,8 +85,11 @@ def _load_seed_papers(path: Path) -> list[dict[str, Any]]:
 
 def _fetch_seed_papers(domain: str, limit: int, cache_path: Path) -> list[dict[str, Any]]:
     client = ScholarlyClient(cache_path=cache_path)
-    query = f"{domain} research benchmark"
-    raw = client.search_semantic_scholar(query, limit=limit)
+    if domain == "astrophysics":
+        raw = client.search_arxiv("cat:astro-ph.* AND all:survey OR all:redshift OR all:photometry", limit=limit)
+    else:
+        query = f"{domain} research benchmark"
+        raw = client.search_semantic_scholar(query, limit=limit)
     papers: list[dict[str, Any]] = []
     for idx, item in enumerate(raw):
         doi = item.get("externalIds", {}).get("DOI") if isinstance(item.get("externalIds"), dict) else None
@@ -119,9 +122,10 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=25)
     parser.add_argument("--latent-dim", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--root", default="manifold_index")
     args = parser.parse_args()
 
-    root = Path("manifold_index")
+    root = Path(args.root)
     root.mkdir(exist_ok=True)
     manifold = ManifoldIndex(root)
 
@@ -152,19 +156,21 @@ def main() -> None:
             }
         )
     manifold.upsert_collection(enriched, collection="papers")
+    health = manifold.assess_health()
     manifest_path = root / f"{args.domain}_manifest.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "domain": args.domain,
-                "paper_count": len(enriched),
-                "latent_dim": min(args.latent_dim, len(enriched)),
-                "mean_density": round(sum(item["density_score"] for item in enriched) / len(enriched), 6),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    health_path = root / f"{args.domain}_manifold_health.json"
+    manifest = {
+        "domain": args.domain,
+        "paper_count": len(enriched),
+        "latent_dim": min(args.latent_dim, len(enriched)),
+        "mean_density": round(sum(item["density_score"] for item in enriched) / len(enriched), 6),
+        "citation_edge_count": health.citation_edge_count,
+        "status": health.status,
+        "ready_modes": health.ready_modes,
+        "reasons": health.reasons,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    health_path.write_text(json.dumps(health.to_dict(), indent=2), encoding="utf-8")
     print(
         json.dumps(
             {
@@ -174,6 +180,9 @@ def main() -> None:
                 "latent_dim": min(args.latent_dim, len(enriched)),
                 "mean_density": round(sum(item["density_score"] for item in enriched) / len(enriched), 6),
                 "manifest_path": str(manifest_path),
+                "health_path": str(health_path),
+                "manifold_status": health.status,
+                "ready_modes": health.ready_modes,
             }
         )
     )
