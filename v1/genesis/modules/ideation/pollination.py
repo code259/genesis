@@ -56,7 +56,7 @@ class PollinationSearch:
         papers = self.manifold.all_papers()
         latent_dim = len(papers[0].get("latent_z", [])) if papers else 32
         seed = hash_embedding(task_description, dim=max(32, latent_dim))[:latent_dim].tolist()
-        landing = self.sample_distant_point(seed, theta_jump=0.55)
+        landing = self.sample_distant_point(seed, theta_jump=2.0)
         path = self.find_return_path(landing, seed)
         novelty = cosine_distance(seed, landing)
         return Idea(
