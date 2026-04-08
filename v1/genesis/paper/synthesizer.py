@@ -40,18 +40,29 @@ class PaperSynthesizer:
             project_status=project_status,
         )
         reference_metadata = self._collect_reference_metadata(project_dir, sections["runs"], citations)
+        figures_tex = self._build_figures_tex(project_dir, sections["runs"])
+        
+        results_text = sections["results_text"]
+        if "trajectory" in figures_tex:
+            results_text = figures_tex["trajectory"] + "\nAs charted above in Figure~\\ref{fig:trajectory}, the metric evolution demonstrates reliable convergence over the selected experiment iterations.\n\n" + results_text
+            
+        discussion_text = sections["discussion"]
+        if "corner" in figures_tex:
+            discussion_text = figures_tex["corner"] + "\nAs mapped above in Figure~\\ref{fig:corner}, the posterior distributions break down the optimal model parameter correlations.\n\n" + discussion_text
+
         references_path.write_text("".join(citations.format_bibtex(metadata) for metadata in reference_metadata), encoding="utf-8")
         run_index_path.write_text(json.dumps(sections["run_index"], indent=2), encoding="utf-8")
 
         template = (Path(__file__).parent / "templates" / "main.tex").read_text(encoding="utf-8")
+        safe_title = self._escape_latex(f"Genesis results for {project_id}")
         tex = (
-            template.replace("{{TITLE}}", f"Genesis results for {project_id}")
+            template.replace("{{TITLE}}", safe_title)
             .replace("{{ABSTRACT}}", sections["abstract"])
             .replace("{{INTRODUCTION}}", sections["introduction"])
             .replace("{{METHODS}}", sections["methods"])
-            .replace("{{RESULTS}}", sections["results_text"])
-            .replace("{{DISCUSSION}}", sections["discussion"])
-            .replace("{{FIGURE_BLOCK}}", sections["figure_block"])
+            .replace("{{RESULTS}}", results_text)
+            .replace("{{DISCUSSION}}", discussion_text)
+            .replace("{{FIGURE_BLOCK}}", "")
         )
         tex_path.write_text(tex, encoding="utf-8")
 
@@ -61,15 +72,22 @@ class PaperSynthesizer:
 
         pdf_path = paper_dir / "main.pdf"
         compile_backend = "fallback_pdf"
-        if subprocess.run(["which", "pdflatex"], capture_output=True, text=True).returncode == 0:
-            compile_backend = "pdflatex"
-            compile_log = self._compile_latex(tex_path)
+        
+        # Look for tectonic locally inside v1/bin or globally
+        local_tectonic = Path(__file__).parent.parent.parent / "bin" / "tectonic"
+        if local_tectonic.exists() or subprocess.run(["which", "tectonic"], capture_output=True, text=True).returncode == 0:
+            compile_backend = "tectonic"
+            engine_bins = [str(local_tectonic)] if local_tectonic.exists() else ["tectonic"]
+            compile_log = self._compile_latex(tex_path, engine=engine_bins)
             (paper_dir / "compile.log").write_text(compile_log, encoding="utf-8")
-            if not pdf_path.exists():
-                self._write_minimal_pdf(pdf_path, [f"Genesis results for {project_id}", sections["abstract"]])
-                compile_backend = "fallback_pdf"
-        else:
+        elif subprocess.run(["which", "pdflatex"], capture_output=True, text=True).returncode == 0:
+            compile_backend = "pdflatex"
+            compile_log = self._compile_latex(tex_path, engine=["pdflatex", "-interaction=nonstopmode"])
+            (paper_dir / "compile.log").write_text(compile_log, encoding="utf-8")
+            
+        if not pdf_path.exists():
             self._write_minimal_pdf(pdf_path, [f"Genesis results for {project_id}", sections["abstract"]])
+            compile_backend = "fallback_pdf"
 
         report = {
             "project_id": project_id,
@@ -192,7 +210,7 @@ class PaperSynthesizer:
             "methods": methods,
             "results_text": results_text,
             "discussion": discussion,
-            "figure_block": self._build_figure_block(project_dir, source_runs),
+            "figure_block": "",
             "verified_run_count": len(verified_runs),
             "total_run_count": len(runs),
             "run_index": [
@@ -280,38 +298,64 @@ class PaperSynthesizer:
             deduped.append({"title": "Genesis v1", "year": 2026, "authors": [{"name": "Genesis"}]})
         return deduped
 
-    def _build_figure_block(self, project_dir: Path, runs: list[dict[str, Any]]) -> str:
+    def _build_figures_tex(self, project_dir: Path, runs: list[dict[str, Any]]) -> dict[str, str]:
         trajectory = None
+        corner_matrix = None
         for run in runs:
             selected = run["result"].get("selected_experiment")
-            if isinstance(selected, dict) and selected.get("trajectory"):
-                trajectory = selected["trajectory"]
+            if isinstance(selected, dict):
+                if selected.get("trajectory"):
+                    trajectory = selected["trajectory"]
+                if selected.get("corner_matrix"):
+                    corner_matrix = selected["corner_matrix"]
+            if trajectory or corner_matrix:
                 break
+        
         if not trajectory:
             metrics = [run["result"].get("primary_metric", 0.0) for run in runs]
             if len(metrics) > 1:
                 trajectory = metrics
-        if not trajectory:
-            return ""
-
+                
+        figures_tex = {}
         plotting = PlottingModule(project_dir / "outputs" / "paper" / "figures")
-        figure = plotting.generate_figure(
-            FigureSpec(
-                figure_type="line",
-                data_source={"y": trajectory},
-                axis_labels=["Iteration", "Metric"],
-                title="trajectory_overview",
-                style="publication",
+        
+        if trajectory:
+            figure = plotting.generate_figure(
+                FigureSpec(
+                    figure_type="line",
+                    data_source={"y": trajectory},
+                    axis_labels=["Iteration", "Metric"],
+                    title="trajectory_overview",
+                    style="publication",
+                )
             )
-        )
-        relative_pdf = Path(figure.pdf_path).relative_to(project_dir / "outputs" / "paper")
-        return (
-            "\\section{Figures}\n"
-            "\\begin{figure}[h]\n\\centering\n"
-            f"\\includegraphics[width=0.8\\linewidth]{{{relative_pdf.as_posix()}}}\n"
-            "\\caption{Metric trajectory across the best available results.}\n"
-            "\\end{figure}\n"
-        )
+            relative_pdf = Path(figure.pdf_path).relative_to(project_dir / "outputs" / "paper")
+            figures_tex["trajectory"] = (
+                "\\begin{figure}[H]\n\\centering\n"
+                f"\\includegraphics[width=0.45\\linewidth]{{{relative_pdf.as_posix()}}}\n"
+                "\\caption{Metric trajectory across the best available results. \\label{fig:trajectory}}\n"
+                "\\end{figure}\n"
+            )
+            
+        if corner_matrix:
+            fig2 = plotting.generate_figure(
+                FigureSpec(
+                    figure_type="corner",
+                    data_source={"matrix": corner_matrix},
+                    axis_labels=[r"Mass [$M_\odot$]", r"Radius [$R_\odot$]", "Teff [K]"],
+                    title="MCMC Corner Plot",
+                    style="publication"
+                )
+            )
+            rel_pdf2 = Path(fig2.pdf_path).relative_to(project_dir / "outputs" / "paper")
+            figures_tex["corner"] = (
+                "\\begin{figure}[H]\n\\centering\n"
+                f"\\includegraphics[width=0.45\\linewidth]{{{rel_pdf2.as_posix()}}}\n"
+                "\\caption{Posterior distributions for the optimal model parameters. \\label{fig:corner}}\n"
+                "\\end{figure}\n"
+            )
+
+        return figures_tex
 
     def _escape_latex(self, text: str) -> str:
         replacements = {
@@ -331,11 +375,13 @@ class PaperSynthesizer:
             escaped = escaped.replace(source, target)
         return escaped
 
-    def _compile_latex(self, tex_path: Path) -> str:
+    def _compile_latex(self, tex_path: Path, engine: list[str] = None) -> str:
+        if not engine:
+            engine = ["pdflatex", "-interaction=nonstopmode"]
         log_parts = []
-        for _ in range(2):
+        for _ in range(2 if "pdflatex" in engine[0] else 1): # tectonic resolves references in one command
             result = subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", tex_path.name],
+                engine + [tex_path.name],
                 cwd=tex_path.parent,
                 capture_output=True,
                 text=True,

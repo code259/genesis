@@ -1,0 +1,7 @@
+[
+  {
+    "task_id": "mcmc_fitting",
+    "primary_metric": 0.998,
+    "verification_passed": true
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "title": "Training Loss Trajectory",
+  "figure_type": "line",
+  "axis_labels": [
+    "Epochs",
+    "Loss"
+  ],
+  "style": "publication",
+  "data_points": 100,
+  "data_source": "inline",
+  "pdf_path": "/Users/sangeetadegalmadikar/Desktop/genesis/genesis/v1/test_visual_outputs/figures/training_loss_trajectory/training_loss_trajectory.pdf",
+  "png_path": "/Users/sangeetadegalmadikar/Desktop/genesis/genesis/v1/test_visual_outputs/figures/training_loss_trajectory/training_loss_trajectory.png"
+}

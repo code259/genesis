@@ -1,0 +1,1 @@
+Exoplanet transit photometry combined with MCMC posterior modeling allows exact radii extraction.

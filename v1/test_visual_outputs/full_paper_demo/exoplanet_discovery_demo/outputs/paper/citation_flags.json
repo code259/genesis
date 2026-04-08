@@ -1,0 +1,251 @@
+[
+  {
+    "flag": "NOT_VERIFIED",
+    "citation_key": "d_foreman_mackey_2025_advanced_markov_chain_monte_carlo_methods_in_astrophysics",
+    "evidence": [
+      {
+        "source": "crossref",
+        "match": false,
+        "metadata": {
+          "paper_id": "",
+          "title": "",
+          "abstract": "",
+          "year": null,
+          "authors": [],
+          "externalIds": {},
+          "citationCount": 0,
+          "url": "",
+          "venue": "",
+          "doi": null,
+          "citations": []
+        }
+      },
+      {
+        "source": "crossref_search",
+        "match": true,
+        "metadata": {
+          "paper_id": "10.1002/9780470669723",
+          "title": "Advanced Markov Chain Monte Carlo Methods",
+          "abstract": "",
+          "year": 2010,
+          "authors": [
+            {
+              "name": "Faming Liang"
+            },
+            {
+              "name": "Chuanhai Liu"
+            },
+            {
+              "name": "Raymond J. Carroll"
+            }
+          ],
+          "externalIds": {
+            "DOI": "10.1002/9780470669723"
+          },
+          "citationCount": 118,
+          "url": "https://doi.org/10.1002/9780470669723",
+          "venue": "",
+          "doi": "10.1002/9780470669723",
+          "citations": []
+        }
+      },
+      {
+        "source": "year_check",
+        "flag": "year_mismatch",
+        "expected_year": 2025
+      }
+    ]
+  },
+  {
+    "flag": "NOT_VERIFIED",
+    "citation_key": "j_kepler_2024_a_rocky_planet_in_the_habitable_zone",
+    "evidence": [
+      {
+        "source": "crossref",
+        "match": false,
+        "metadata": {
+          "paper_id": "10.1038/nature12345",
+          "title": "LRG1 promotes angiogenesis by modulating endothelial TGF-\u03b2 signalling",
+          "abstract": "",
+          "year": 2013,
+          "authors": [
+            {
+              "name": "Xiaomeng Wang"
+            },
+            {
+              "name": "Sabu Abraham"
+            },
+            {
+              "name": "Jenny A. G. McKenzie"
+            },
+            {
+              "name": "Natasha Jeffs"
+            },
+            {
+              "name": "Matthew Swire"
+            },
+            {
+              "name": "Vineeta B. Tripathi"
+            },
+            {
+              "name": "Ulrich F. O. Luhmann"
+            },
+            {
+              "name": "Clemens A. K. Lange"
+            },
+            {
+              "name": "Zhenhua Zhai"
+            },
+            {
+              "name": "Helen M. Arthur"
+            },
+            {
+              "name": "James W. B. Bainbridge"
+            },
+            {
+              "name": "Stephen E. Moss"
+            },
+            {
+              "name": "John Greenwood"
+            }
+          ],
+          "externalIds": {
+            "DOI": "10.1038/nature12345"
+          },
+          "citationCount": 461,
+          "url": "https://doi.org/10.1038/nature12345",
+          "venue": "Nature",
+          "doi": "10.1038/nature12345",
+          "citations": []
+        }
+      },
+      {
+        "source": "semantic_scholar",
+        "match": false,
+        "metadata": {
+          "paper_id": "8258f23fdc07b518e37474abb52a060261cc6ae7",
+          "title": "JWST-TST DREAMS: NIRSpec/PRISM Transmission Spectroscopy of the Habitable Zone Planet TRAPPIST-1 e",
+          "abstract": "TRAPPIST-1 e is one of the very few rocky exoplanets that is both amenable to atmospheric characterization and resides in the habitable zone of its star\u2014located at a distance from its star such that it might, with the right atmosphere, sustain liquid water on its surface. Here, we present a set of four JWST/NIRSpec PRISM transmission spectra of TRAPPIST-1 e obtained in mid-to-late 2023. Our transmission spectra exhibit similar levels of stellar contamination as observed in prior works for other planets in the TRAPPIST-1 system but over a wider wavelength range, showcasing the challenge of characterizing the TRAPPIST-1 planets even at relatively long wavelengths (3\u20135 \u03bcm). While we show that current stellar modeling frameworks are unable to explain the stellar contamination features in our spectra, we demonstrate that we can marginalize over those features instead using Gaussian processes, which enables us to perform novel exoplanet atmospheric inferences with our transmission spectra. In particular, we are able to rule out cloudy, primary H2-dominated (\u227380% by volume) atmospheres at better than a 3\u03c3 level. Constraints on possible secondary atmospheres on TRAPPIST-1 e are presented in a companion paper. Our work showcases how JWST is breaking ground in the precision needed to constrain the atmospheric composition of habitable-zone rocky exoplanets.",
+          "year": 2025,
+          "authors": [
+            {
+              "name": "N\u00e9stor Espinoza"
+            },
+            {
+              "name": "N. Allen"
+            },
+            {
+              "name": "A. Glidden"
+            },
+            {
+              "name": "N. Lewis"
+            },
+            {
+              "name": "S. Seager"
+            },
+            {
+              "name": "Caleb I. Ca\u00f1as"
+            },
+            {
+              "name": "D. Grant"
+            },
+            {
+              "name": "A. Gressier"
+            },
+            {
+              "name": "Shelby Courreges"
+            },
+            {
+              "name": "Kevin B. Stevenson"
+            },
+            {
+              "name": "S. Ranjan"
+            },
+            {
+              "name": "Knicole Col\u00f3n"
+            },
+            {
+              "name": "Brett M. Morris"
+            },
+            {
+              "name": "R. J. MacDonald"
+            },
+            {
+              "name": "Douglas Long"
+            },
+            {
+              "name": "H. Wakeford"
+            },
+            {
+              "name": "Jeff A. Valenti"
+            },
+            {
+              "name": "L. Alderson"
+            },
+            {
+              "name": "N. Batalha"
+            },
+            {
+              "name": "R. Challener"
+            },
+            {
+              "name": "Jingcheng Huang"
+            },
+            {
+              "name": "Zifan Lin"
+            },
+            {
+              "name": "D. Louie"
+            },
+            {
+              "name": "Elijah Mullens"
+            },
+            {
+              "name": "Daniel Valentine"
+            },
+            {
+              "name": "C. M. Mountain"
+            },
+            {
+              "name": "L. Pueyo"
+            },
+            {
+              "name": "Marshall D. Perrin"
+            },
+            {
+              "name": "A. Bellini"
+            },
+            {
+              "name": "Jens Kammerer"
+            },
+            {
+              "name": "M. Libralato"
+            },
+            {
+              "name": "I. Rebollido"
+            },
+            {
+              "name": "E. Rickman"
+            },
+            {
+              "name": "S. T. Sohn"
+            },
+            {
+              "name": "R. P. van der Marel"
+            }
+          ],
+          "externalIds": {
+            "ArXiv": "2509.05414",
+            "DOI": "10.3847/2041-8213/adf42e",
+            "CorpusId": 281203782
+          },
+          "citationCount": 9,
+          "url": "https://www.semanticscholar.org/paper/8258f23fdc07b518e37474abb52a060261cc6ae7",
+          "venue": "",
+          "doi": "10.3847/2041-8213/adf42e",
+          "citations": []
+        }
+      }
+    ]
+  }
+]

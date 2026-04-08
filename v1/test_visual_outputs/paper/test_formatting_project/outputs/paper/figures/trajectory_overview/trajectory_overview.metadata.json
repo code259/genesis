@@ -1,0 +1,13 @@
+{
+  "title": "trajectory_overview",
+  "figure_type": "line",
+  "axis_labels": [
+    "Iteration",
+    "Metric"
+  ],
+  "style": "publication",
+  "data_points": 5,
+  "data_source": "inline",
+  "pdf_path": "/Users/sangeetadegalmadikar/Desktop/genesis/genesis/v1/test_visual_outputs/paper/test_formatting_project/outputs/paper/figures/trajectory_overview/trajectory_overview.pdf",
+  "png_path": "/Users/sangeetadegalmadikar/Desktop/genesis/genesis/v1/test_visual_outputs/paper/test_formatting_project/outputs/paper/figures/trajectory_overview/trajectory_overview.png"
+}

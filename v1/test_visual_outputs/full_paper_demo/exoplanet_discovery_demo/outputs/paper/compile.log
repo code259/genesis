@@ -1,0 +1,36 @@
+note: Running TeX ...
+note: Running BibTeX on main.aux ...
+note: warnings were issued by BibTeX; use --print and/or --keep-logs for details.
+note: Rerunning TeX because bibtex was run ...
+note: Rerunning TeX because "main.aux" changed ...
+note: Rerunning TeX because "main.bbl" changed ...
+note: Rerunning TeX because "main.bbl" changed ...
+note: Rerunning TeX because "main.bbl" changed ...
+note: Rerunning TeX because "main.bbl" changed ...
+note: Running xdvipdfmx ...
+note: Writing `main.pdf` (99.76 KiB)
+note: Skipped writing 3 intermediate files (use --keep-intermediates to keep them)
+
+warning: algorithm.sty:11: 
+Invalid UTF-8 byte or sequence at line 11 replaced by U+FFFD.
+warning: algorithm.sty:11: 
+Invalid UTF-8 byte or sequence at line 11 replaced by U+FFFD.
+warning: algorithm.sty:11: 
+Invalid UTF-8 byte or sequence at line 11 replaced by U+FFFD.
+warning: internal consistency problem when checking if main.bbl changed
+warning: algorithm.sty:11: 
+Invalid UTF-8 byte or sequence at line 11 replaced by U+FFFD.
+warning: internal consistency problem when checking if main.bbl changed
+warning: algorithm.sty:11: 
+Invalid UTF-8 byte or sequence at line 11 replaced by U+FFFD.
+warning: internal consistency problem when checking if main.bbl changed
+warning: algorithm.sty:11: 
+Invalid UTF-8 byte or sequence at line 11 replaced by U+FFFD.
+warning: internal consistency problem when checking if main.bbl changed
+warning: algorithm.sty:11: 
+Invalid UTF-8 byte or sequence at line 11 replaced by U+FFFD.
+warning: internal consistency problem when checking if main.bbl changed
+warning: TeX rerun seems needed, but stopping at 6 passes
+warning: warnings were issued by the TeX engine; use --print and/or --keep-logs for details.
+warning: Object @figure.1 already defined.
+warning: Object @figure.2 already defined.

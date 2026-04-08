@@ -1,0 +1,513 @@
+{
+  "10.1038/nature12345": {
+    "title": "A rocky planet in the habitable zone",
+    "year": "2024",
+    "authors": [
+      {
+        "name": "J Kepler"
+      }
+    ]
+  },
+  "10.1038/nature54321": {
+    "title": "Advanced Markov Chain Monte Carlo methods in Astrophysics",
+    "year": "2025",
+    "authors": [
+      {
+        "name": "D Foreman Mackey"
+      }
+    ]
+  },
+  "s2_search:{\"limit\": 5, \"query\": \"Confirmation and parameterization of a potentially habitable rocky exoplanet transit signal.\"}": [],
+  "crossref_search:{\"limit\": 1, \"query\": \"Confirmation and parameterization of a potentially habitable rocky exoplanet transit signal.\"}": [
+    {
+      "paper_id": "10.1088/2058-7058/37/09/03",
+      "title": "Icy exoplanet found to be potentially habitable",
+      "abstract": "Astronomers have discovered that the temperate exoplanet LHS 1140 b may have an atmosphere, could be covered in ice, and may even have an ocean of liquid water.",
+      "year": 2024,
+      "authors": [
+        {
+          "name": "Abigail Williams"
+        }
+      ],
+      "externalIds": {
+        "DOI": "10.1088/2058-7058/37/09/03"
+      },
+      "citationCount": 0,
+      "url": "https://doi.org/10.1088/2058-7058/37/09/03",
+      "venue": "Physics World",
+      "doi": "10.1088/2058-7058/37/09/03",
+      "citations": []
+    }
+  ],
+  "crossref_doi:{\"doi\": \"10.1038/nature54321\"}": {
+    "paper_id": "",
+    "title": "",
+    "abstract": "",
+    "year": null,
+    "authors": [],
+    "externalIds": {},
+    "citationCount": 0,
+    "url": "",
+    "venue": "",
+    "doi": null,
+    "citations": []
+  },
+  "s2_search:{\"limit\": 5, \"query\": \"Advanced Markov Chain Monte Carlo methods in Astrophysics\"}": [],
+  "crossref_search:{\"limit\": 3, \"query\": \"Advanced Markov Chain Monte Carlo methods in Astrophysics\"}": [
+    {
+      "paper_id": "10.1002/9780470669723",
+      "title": "Advanced Markov Chain Monte Carlo Methods",
+      "abstract": "",
+      "year": 2010,
+      "authors": [
+        {
+          "name": "Faming Liang"
+        },
+        {
+          "name": "Chuanhai Liu"
+        },
+        {
+          "name": "Raymond J. Carroll"
+        }
+      ],
+      "externalIds": {
+        "DOI": "10.1002/9780470669723"
+      },
+      "citationCount": 118,
+      "url": "https://doi.org/10.1002/9780470669723",
+      "venue": "",
+      "doi": "10.1002/9780470669723",
+      "citations": []
+    },
+    {
+      "paper_id": "10.1007/978-3-032-08078-3_9",
+      "title": "Markov Chain Monte Carlo Methods",
+      "abstract": "",
+      "year": 2026,
+      "authors": [
+        {
+          "name": "Thomas Neifer"
+        }
+      ],
+      "externalIds": {
+        "DOI": "10.1007/978-3-032-08078-3_9"
+      },
+      "citationCount": 0,
+      "url": "https://doi.org/10.1007/978-3-032-08078-3_9",
+      "venue": "Springer Texts in Business and Economics",
+      "doi": "10.1007/978-3-032-08078-3_9",
+      "citations": []
+    },
+    {
+      "paper_id": "10.1007/978-3-032-01190-9_6",
+      "title": "Markov Chain Monte Carlo Methods",
+      "abstract": "",
+      "year": 2025,
+      "authors": [
+        {
+          "name": "Pawe\u0142 Lorek"
+        },
+        {
+          "name": "Tomasz Rolski"
+        }
+      ],
+      "externalIds": {
+        "DOI": "10.1007/978-3-032-01190-9_6"
+      },
+      "citationCount": 0,
+      "url": "https://doi.org/10.1007/978-3-032-01190-9_6",
+      "venue": "Probability Theory and Stochastic Modelling",
+      "doi": "10.1007/978-3-032-01190-9_6",
+      "citations": []
+    }
+  ],
+  "crossref_doi:{\"doi\": \"10.1038/nature12345\"}": {
+    "paper_id": "10.1038/nature12345",
+    "title": "LRG1 promotes angiogenesis by modulating endothelial TGF-\u03b2 signalling",
+    "abstract": "",
+    "year": 2013,
+    "authors": [
+      {
+        "name": "Xiaomeng Wang"
+      },
+      {
+        "name": "Sabu Abraham"
+      },
+      {
+        "name": "Jenny A. G. McKenzie"
+      },
+      {
+        "name": "Natasha Jeffs"
+      },
+      {
+        "name": "Matthew Swire"
+      },
+      {
+        "name": "Vineeta B. Tripathi"
+      },
+      {
+        "name": "Ulrich F. O. Luhmann"
+      },
+      {
+        "name": "Clemens A. K. Lange"
+      },
+      {
+        "name": "Zhenhua Zhai"
+      },
+      {
+        "name": "Helen M. Arthur"
+      },
+      {
+        "name": "James W. B. Bainbridge"
+      },
+      {
+        "name": "Stephen E. Moss"
+      },
+      {
+        "name": "John Greenwood"
+      }
+    ],
+    "externalIds": {
+      "DOI": "10.1038/nature12345"
+    },
+    "citationCount": 461,
+    "url": "https://doi.org/10.1038/nature12345",
+    "venue": "Nature",
+    "doi": "10.1038/nature12345",
+    "citations": []
+  },
+  "s2_search:{\"limit\": 5, \"query\": \"A rocky planet in the habitable zone\"}": [
+    {
+      "paper_id": "8258f23fdc07b518e37474abb52a060261cc6ae7",
+      "title": "JWST-TST DREAMS: NIRSpec/PRISM Transmission Spectroscopy of the Habitable Zone Planet TRAPPIST-1 e",
+      "abstract": "TRAPPIST-1 e is one of the very few rocky exoplanets that is both amenable to atmospheric characterization and resides in the habitable zone of its star\u2014located at a distance from its star such that it might, with the right atmosphere, sustain liquid water on its surface. Here, we present a set of four JWST/NIRSpec PRISM transmission spectra of TRAPPIST-1 e obtained in mid-to-late 2023. Our transmission spectra exhibit similar levels of stellar contamination as observed in prior works for other planets in the TRAPPIST-1 system but over a wider wavelength range, showcasing the challenge of characterizing the TRAPPIST-1 planets even at relatively long wavelengths (3\u20135 \u03bcm). While we show that current stellar modeling frameworks are unable to explain the stellar contamination features in our spectra, we demonstrate that we can marginalize over those features instead using Gaussian processes, which enables us to perform novel exoplanet atmospheric inferences with our transmission spectra. In particular, we are able to rule out cloudy, primary H2-dominated (\u227380% by volume) atmospheres at better than a 3\u03c3 level. Constraints on possible secondary atmospheres on TRAPPIST-1 e are presented in a companion paper. Our work showcases how JWST is breaking ground in the precision needed to constrain the atmospheric composition of habitable-zone rocky exoplanets.",
+      "year": 2025,
+      "authors": [
+        {
+          "name": "N\u00e9stor Espinoza"
+        },
+        {
+          "name": "N. Allen"
+        },
+        {
+          "name": "A. Glidden"
+        },
+        {
+          "name": "N. Lewis"
+        },
+        {
+          "name": "S. Seager"
+        },
+        {
+          "name": "Caleb I. Ca\u00f1as"
+        },
+        {
+          "name": "D. Grant"
+        },
+        {
+          "name": "A. Gressier"
+        },
+        {
+          "name": "Shelby Courreges"
+        },
+        {
+          "name": "Kevin B. Stevenson"
+        },
+        {
+          "name": "S. Ranjan"
+        },
+        {
+          "name": "Knicole Col\u00f3n"
+        },
+        {
+          "name": "Brett M. Morris"
+        },
+        {
+          "name": "R. J. MacDonald"
+        },
+        {
+          "name": "Douglas Long"
+        },
+        {
+          "name": "H. Wakeford"
+        },
+        {
+          "name": "Jeff A. Valenti"
+        },
+        {
+          "name": "L. Alderson"
+        },
+        {
+          "name": "N. Batalha"
+        },
+        {
+          "name": "R. Challener"
+        },
+        {
+          "name": "Jingcheng Huang"
+        },
+        {
+          "name": "Zifan Lin"
+        },
+        {
+          "name": "D. Louie"
+        },
+        {
+          "name": "Elijah Mullens"
+        },
+        {
+          "name": "Daniel Valentine"
+        },
+        {
+          "name": "C. M. Mountain"
+        },
+        {
+          "name": "L. Pueyo"
+        },
+        {
+          "name": "Marshall D. Perrin"
+        },
+        {
+          "name": "A. Bellini"
+        },
+        {
+          "name": "Jens Kammerer"
+        },
+        {
+          "name": "M. Libralato"
+        },
+        {
+          "name": "I. Rebollido"
+        },
+        {
+          "name": "E. Rickman"
+        },
+        {
+          "name": "S. T. Sohn"
+        },
+        {
+          "name": "R. P. van der Marel"
+        }
+      ],
+      "externalIds": {
+        "ArXiv": "2509.05414",
+        "DOI": "10.3847/2041-8213/adf42e",
+        "CorpusId": 281203782
+      },
+      "citationCount": 9,
+      "url": "https://www.semanticscholar.org/paper/8258f23fdc07b518e37474abb52a060261cc6ae7",
+      "venue": "",
+      "doi": "10.3847/2041-8213/adf42e",
+      "citations": []
+    },
+    {
+      "paper_id": "0c37196b60cdc7ed7dd7cf5f14501a79ca992560",
+      "title": "A Second Earth-sized Planet in the Habitable Zone of the M Dwarf, TOI-700",
+      "abstract": "We report the discovery of TOI-700 e, a 0.95 R \u2295 planet residing in the Optimistic Habitable Zone (HZ) of its host star. This discovery was enabled by multiple years of monitoring from NASA\u2019s Transiting Exoplanet Survey Satellite (TESS) mission. The host star, TOI-700 (TIC 150428135), is a nearby (31.1 pc), inactive, M2.5 dwarf (V mag = 13.15). TOI-700 is already known to host three planets, including the small, HZ planet, TOI-700 d. The new planet has an orbital period of 27.8 days, and based on its radius (0.95 R \u2295), it is likely rocky. TOI-700 was observed for 21 sectors over Years 1 and 3 of the TESS mission, including 10 sectors at 20 s cadence in Year 3. Using this full set of TESS data and additional follow-up observations, we identify, validate, and characterize TOI-700 e. This discovery adds another world to the short list of small, HZ planets transiting nearby and bright host stars. Such systems, where the stars are bright enough that follow-up observations are possible to constrain planet masses and atmospheres using current and future facilities, are incredibly valuable. The presence of multiple small, HZ planets makes this system even more enticing for follow-up observations.",
+      "year": 2023,
+      "authors": [
+        {
+          "name": "E. Gilbert"
+        },
+        {
+          "name": "A. Vanderburg"
+        },
+        {
+          "name": "Joseph E. Rodriguez"
+        },
+        {
+          "name": "B. Hord"
+        },
+        {
+          "name": "M. Clement"
+        },
+        {
+          "name": "T. Barclay"
+        },
+        {
+          "name": "E. Quintana"
+        },
+        {
+          "name": "J. Schlieder"
+        },
+        {
+          "name": "S. Kane"
+        },
+        {
+          "name": "J. Jenkins"
+        },
+        {
+          "name": "J. Twicken"
+        },
+        {
+          "name": "M. Kunimoto"
+        },
+        {
+          "name": "R. Vanderspek"
+        },
+        {
+          "name": "G. Arney"
+        },
+        {
+          "name": "D. Charbonneau"
+        },
+        {
+          "name": "M. G\u00fcnther"
+        },
+        {
+          "name": "Chelsea X. Huang"
+        },
+        {
+          "name": "G. Isopi"
+        },
+        {
+          "name": "V. Kostov"
+        },
+        {
+          "name": "M. Kristiansen"
+        },
+        {
+          "name": "D. Latham"
+        },
+        {
+          "name": "F. Mallia"
+        },
+        {
+          "name": "E. Mamajek"
+        },
+        {
+          "name": "I. Mireles"
+        },
+        {
+          "name": "S. Quinn"
+        },
+        {
+          "name": "G. Ricker"
+        },
+        {
+          "name": "J. Schulte"
+        },
+        {
+          "name": "S. Seager"
+        },
+        {
+          "name": "G. Suissa"
+        },
+        {
+          "name": "J. Winn"
+        },
+        {
+          "name": "A. Youngblood"
+        },
+        {
+          "name": "Aldo Zapparata"
+        }
+      ],
+      "externalIds": {
+        "ArXiv": "2301.03617",
+        "DOI": "10.3847/2041-8213/acb599",
+        "CorpusId": 255570018
+      },
+      "citationCount": 20,
+      "url": "https://www.semanticscholar.org/paper/0c37196b60cdc7ed7dd7cf5f14501a79ca992560",
+      "venue": "",
+      "doi": "10.3847/2041-8213/acb599",
+      "citations": []
+    },
+    {
+      "paper_id": "1feece89a6038fee6e3d77256f9874d820566482",
+      "title": "Water content of rocky exoplanets in the habitable zone",
+      "abstract": "In this study we investigated the interiors of rocky exoplanets in order to identify those that may have large quantities of water. \nWe modelled the interiors of 28 rocky exoplanets, assuming four different layers - an iron core, a rock mantle, a high-pressure ice layer, and a surface ice/water layer. Due to observational bias, our study is limited to habitable zone exoplanets. We determined a range of possible water mass fractions for each planet consistent with the modelled planetary structures. We calculated the tidal heating experienced by these exoplanets through gravitational interactions with their host stars, assuming a temperature- and composition-dependent Maxwell viscoelastic rheology. Assuming radioactive elemental abundances observed in Solar System meteorites, we also calculated the radiogenic heat flux inside the planets. We estimated the probability of the presence of a thick ocean layer in these planets, taking into account the effect of both tidal and radiogenic heating. Our results showed that Proxima Centauri b, Ross 128 b, Teegarden's b and c, GJ 1061 c and d, and TRAPPIST-1 e may have an extended liquid water reservoir. Furthermore, extremely high H$_2$O-content of the exoplanets Kepler-62 f, Kepler-1652 b, Kepler-452 b, and Kepler-442 b suggests that these planets may maintain a water vapour atmosphere and may in fact be examples of larger ocean worlds. Upon the discovery of new rocky exoplanets beyond the habitable zone, our study can be extended to icy worlds.",
+      "year": 2023,
+      "authors": [
+        {
+          "name": "'A. Boldog"
+        },
+        {
+          "name": "V. Dobos"
+        },
+        {
+          "name": "L. Kiss"
+        },
+        {
+          "name": "Marijn van der Perk"
+        },
+        {
+          "name": "A. C. Barr"
+        }
+      ],
+      "externalIds": {
+        "ArXiv": "2312.01893",
+        "DOI": "10.1051/0004-6361/202346988",
+        "CorpusId": 265321551
+      },
+      "citationCount": 2,
+      "url": "https://www.semanticscholar.org/paper/1feece89a6038fee6e3d77256f9874d820566482",
+      "venue": "",
+      "doi": "10.1051/0004-6361/202346988",
+      "citations": []
+    },
+    {
+      "paper_id": "3cc0419216f2457a4107787c3ef3e88c6d1a43ef",
+      "title": "A Model Earth-sized Planet in the Habitable Zone of \u03b1 Centauri A/B",
+      "abstract": "The bulk chemical composition and interior structure of rocky exoplanets are fundamentally important to understand their long-term evolution and potential habitability. Observations of the chemical compositions of solar system rocky bodies and of other planetary systems have increasingly shown a concordant picture that the chemical composition of rocky planets reflects that of their host stars for refractory elements, whereas this expression breaks down for volatiles. This behavior is explained by devolatilization during planetary formation and early evolution. Here we apply a devolatilization model calibrated with solar system bodies to the chemical composition of our nearest Sun-like stars\u2014\u03b1 Centauri A and B\u2014to estimate the bulk composition of any habitable-zone rocky planet in this binary system (\u201c\u03b1-Cen-Earth\u201d). Through further modeling of likely planetary interiors and early atmospheres, we find that, compared to Earth, such a planet is expected to have (i) a reduced (primitive) mantle that is similarly dominated by silicates, albeit enriched in carbon-bearing species (graphite/diamond); (ii) a slightly larger iron core, with a core mass fraction of 38.4\u22125.1+4.7 wt% (see Earth\u2019s 32.5 \u00b1 0.3 wt%); (iii) an equivalent water-storage capacity; and (iv) a CO2\u2013CH4\u2013H2O-dominated early atmosphere that resembles that of Archean Earth. Further taking into account its \u223c25% lower intrinsic radiogenic heating from long-lived radionuclides, an ancient \u03b1-Cen-Earth (\u223c1.5\u20132.5 Gyr older than Earth) is expected to have less efficient mantle convection and planetary resurfacing, with a potentially prolonged history of stagnant-lid regimes.",
+      "year": 2021,
+      "authors": [
+        {
+          "name": "Haiyang S. Wang"
+        },
+        {
+          "name": "C. Lineweaver"
+        },
+        {
+          "name": "S. Quanz"
+        },
+        {
+          "name": "S. Mojzsis"
+        },
+        {
+          "name": "T. Ireland"
+        },
+        {
+          "name": "P. Sossi"
+        },
+        {
+          "name": "F. Seidler"
+        },
+        {
+          "name": "T. Morel"
+        }
+      ],
+      "externalIds": {
+        "ArXiv": "2110.12565",
+        "DOI": "10.3847/1538-4357/ac4e8c",
+        "CorpusId": 239768334
+      },
+      "citationCount": 8,
+      "url": "https://www.semanticscholar.org/paper/3cc0419216f2457a4107787c3ef3e88c6d1a43ef",
+      "venue": "",
+      "doi": "10.3847/1538-4357/ac4e8c",
+      "citations": []
+    },
+    {
+      "paper_id": "a5d57c5b578e0db0833261dba4c6b0a610025f83",
+      "title": "Initial Reconaissance of a Transiting Rocky Planet in a Nearby M-Dwarf's Habitable Zone",
+      "abstract": "",
+      "year": 2016,
+      "authors": [
+        {
+          "name": "J. Dittmann"
+        }
+      ],
+      "externalIds": {
+        "MAG": "2994458718",
+        "CorpusId": 217564726
+      },
+      "citationCount": 0,
+      "url": "https://www.semanticscholar.org/paper/a5d57c5b578e0db0833261dba4c6b0a610025f83",
+      "venue": "",
+      "doi": null,
+      "citations": []
+    }
+  ]
+}

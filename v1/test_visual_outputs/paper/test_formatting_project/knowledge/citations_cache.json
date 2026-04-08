@@ -1,0 +1,33 @@
+{
+  "s2_search:{\"limit\": 5, \"query\": \"Can aesthetics and formatting be verified dynamically?\"}": [],
+  "crossref_search:{\"limit\": 1, \"query\": \"Can aesthetics and formatting be verified dynamically?\"}": [
+    {
+      "paper_id": "10.3997/2214-4609.201404068",
+      "title": "Dynamically Verified Permeability Modelling From 1D To 3D",
+      "abstract": "",
+      "year": 2006,
+      "authors": [
+        {
+          "name": "A. S. Kaya"
+        },
+        {
+          "name": "S. Al Maskri"
+        },
+        {
+          "name": "L. Ramos"
+        },
+        {
+          "name": "R. Sayed"
+        }
+      ],
+      "externalIds": {
+        "DOI": "10.3997/2214-4609.201404068"
+      },
+      "citationCount": 0,
+      "url": "https://doi.org/10.3997/2214-4609.201404068",
+      "venue": "Geomodel 2006 - 8th EAGE science and applied research conference on oil and gas geological exploration and development",
+      "doi": "10.3997/2214-4609.201404068",
+      "citations": []
+    }
+  ]
+}

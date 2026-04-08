@@ -1,0 +1,14 @@
+{
+  "title": "MCMC Corner Plot",
+  "figure_type": "corner",
+  "axis_labels": [
+    "Mass [$M_\\odot$]",
+    "Radius [$R_\\odot$]",
+    "Teff [K]"
+  ],
+  "style": "publication",
+  "data_points": 0,
+  "data_source": "inline",
+  "pdf_path": "/Users/sangeetadegalmadikar/Desktop/genesis/genesis/v1/test_visual_outputs/figures/mcmc_corner_plot/mcmc_corner_plot.pdf",
+  "png_path": "/Users/sangeetadegalmadikar/Desktop/genesis/genesis/v1/test_visual_outputs/figures/mcmc_corner_plot/mcmc_corner_plot.png"
+}

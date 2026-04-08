@@ -1,0 +1,7 @@
+[
+  {
+    "task_id": "test_aesthetic_generation",
+    "primary_metric": 0.95,
+    "verification_passed": true
+  }
+]
