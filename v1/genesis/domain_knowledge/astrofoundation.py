@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 from typing import Any
 
+from genesis.storage.manifold import ManifoldIndex
 from genesis.scholarly import ScholarlyClient
 
 from .base import DomainKnowledgeProvider
@@ -22,7 +23,9 @@ class AstroFoundationProvider(DomainKnowledgeProvider):
             self.source = "astrofoundation"
             return self.summary
 
-        papers = self.client.search_arxiv(f"astrophysics {question}", limit=3)
+        papers = self.client.search_arxiv(f"cat:astro-ph.* AND all:{question}", limit=3)
+        if not papers:
+            papers = self._manifold_backed_context(question, limit=3)
         if not papers:
             papers = self.client.search_semantic_scholar(f"astrophysics {question}", limit=3)
         if papers:
@@ -53,13 +56,16 @@ class AstroFoundationProvider(DomainKnowledgeProvider):
             return ""
         if not query:
             return self.summary
-        papers = self.client.search_arxiv(query, limit=2)
+        papers = self.client.search_arxiv(f"cat:astro-ph.* AND all:{query}", limit=2)
+        if not papers:
+            papers = self._manifold_backed_context(query, limit=2)
         if not papers:
             papers = self.client.search_semantic_scholar(query, limit=2)
         if not papers:
             return self.summary
         return self.summary + "\n" + "\n".join(
-            f"- {paper.get('title', 'Unknown title')}" for paper in papers
+            f"- {paper.get('title', 'Unknown title')}: {paper.get('abstract', '')[:220]}".strip()
+            for paper in papers
         )
 
     def _astrofoundation_summary(self, question: str) -> str:
@@ -73,3 +79,19 @@ class AstroFoundationProvider(DomainKnowledgeProvider):
         except Exception:
             return ""
         return ""
+
+    def _manifold_backed_context(self, query: str, *, limit: int) -> list[dict[str, Any]]:
+        manifold_path = Path.cwd() / "manifold_index"
+        if not manifold_path.exists():
+            return []
+        manifold = ManifoldIndex(manifold_path)
+        papers = manifold.all_papers()
+        if not papers:
+            return []
+        query_tokens = set(query.lower().split())
+        ranked = sorted(
+            papers,
+            key=lambda paper: len(query_tokens & set(f"{paper.get('title', '')} {paper.get('abstract', '')}".lower().split())),
+            reverse=True,
+        )
+        return ranked[:limit]

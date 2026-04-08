@@ -288,7 +288,7 @@ class ManifoldIndex:
             payload = self._decode_metadata(metadata or {})
             key = "paper_id" if collection == "papers" else "experiment_id"
             payload[key] = item_id
-            payload["embedding"] = list(embedding or [])
+            payload["embedding"] = list(embedding) if embedding is not None else []
             items.append(payload)
         return items
 
@@ -299,11 +299,15 @@ class ManifoldIndex:
 
     def _vector_for(self, item: dict[str, Any]) -> list[float]:
         vector = item.get("latent_z", item.get("embedding", []))
-        return [float(value) for value in vector] if isinstance(vector, list) else []
+        if isinstance(vector, (list, tuple)):
+            return [float(value) for value in vector]
+        return [float(value) for value in vector.tolist()] if hasattr(vector, "tolist") else []
 
     def _embedding_for(self, item: dict[str, Any]) -> list[float]:
         vector = item.get("embedding", [])
-        return [float(value) for value in vector] if isinstance(vector, list) else []
+        if isinstance(vector, (list, tuple)):
+            return [float(value) for value in vector]
+        return [float(value) for value in vector.tolist()] if hasattr(vector, "tolist") else []
 
     def _citations_for(self, item: dict[str, Any]) -> list[Any]:
         citations = item.get("citations", [])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from genesis.models import ExperimentProposal
+from genesis.storage.causal_dag import CausalDAG
 from genesis.storage.ledger import ExperimentLedger
 
 
@@ -13,6 +14,8 @@ class ExperimentProposer:
         prior_metric: float = 0.0,
         compute_budget: str = "local_gpu",
         ledger: ExperimentLedger | None = None,
+        causal_dag: CausalDAG | None = None,
+        domain: str = "",
     ) -> list[ExperimentProposal]:
         history = ledger.get_by_task(task_id) if ledger else []
         prior_metric = max([prior_metric] + [float(item.get("primary_metric", 0.0)) for item in history])
@@ -20,6 +23,18 @@ class ExperimentProposer:
         best_record = history[0] if history else {}
         base_end = max(prior_metric, float(best_record.get("primary_metric", 0.0)), 0.35)
         scale = 0.7 if "cpu" in compute_budget else 1.0
+        target = f"metric:{task_id}"
+        high_confidence_edges = causal_dag.top_edges_for_target(target, domain=domain) if causal_dag else []
+        positive_features = [
+            str(edge.get("source", "")).strip()
+            for edge in high_confidence_edges
+            if float(edge.get("effect_size", 0.0)) > 0.0 and str(edge.get("source", "")).strip()
+        ]
+        negative_features = {
+            str(edge.get("source", "")).strip()
+            for edge in high_confidence_edges
+            if float(edge.get("effect_size", 0.0)) < 0.0 and str(edge.get("source", "")).strip()
+        }
         warmup_candidates = self._warmup_candidates(history, scale=scale)
         step_candidates = self._step_candidates(history, scale=scale)
         learning_rates = self._learning_rates(history, scale=scale)
@@ -38,11 +53,21 @@ class ExperimentProposer:
                 f"warmup_ratio={warmup_ratio}",
                 f"steps={steps}",
             ]
+            config_parts = [part for part in config_parts if part not in negative_features]
             if anomalies and index == 0:
                 config_parts.append("stabilize_after_anomaly=true")
+            if positive_features and index == 0:
+                for feature in positive_features[:2]:
+                    if feature not in config_parts:
+                        config_parts.append(feature)
             proposals.append(
                 ExperimentProposal(
-                    description=self._describe_variant(task_id, index=index, anomalies=bool(anomalies)),
+                    description=self._describe_variant(
+                        task_id,
+                        index=index,
+                        anomalies=bool(anomalies),
+                        has_causal_guidance=bool(positive_features),
+                    ),
                     code_diff="; ".join(config_parts),
                     expected_metric=round(expected_metric, 4),
                     expected_trajectory=[
@@ -75,7 +100,9 @@ class ExperimentProposer:
             base = 0.12
         return [round(base * scale, 3), round(base * 0.85 * scale, 3), round(base * 1.1 * scale, 3)]
 
-    def _describe_variant(self, task_id: str, *, index: int, anomalies: bool) -> str:
+    def _describe_variant(self, task_id: str, *, index: int, anomalies: bool, has_causal_guidance: bool = False) -> str:
         if anomalies and index == 0:
             return f"Stabilization experiment for anomalous task {task_id}"
+        if has_causal_guidance and index == 0:
+            return f"Causally guided experiment variant {index + 1} for task {task_id}"
         return f"Optimizer experiment variant {index + 1} for task {task_id}"
