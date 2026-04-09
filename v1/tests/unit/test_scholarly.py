@@ -1,6 +1,7 @@
 import json
 
 from genesis.scholarly import ScholarlyClient
+from genesis.domain_knowledge.astrofoundation import AstroFoundationProvider
 
 
 class _Response:
@@ -72,3 +73,21 @@ def test_arxiv_parse_errors_return_empty_results(tmp_path):
 
     client = ScholarlyClient(cache_path=tmp_path / "cache.json", session=_BrokenSession())
     assert client.search_arxiv("bad xml", limit=1) == []
+
+
+def test_astrofoundation_ranking_prefers_query_relevant_subdomain(tmp_path):
+    provider = AstroFoundationProvider(cache_root=tmp_path)
+    papers = [
+        {
+            "paper_id": "gw",
+            "title": "Deep search for gravitational waves and neutrinos",
+            "abstract": "Joint source search in multi-messenger astrophysics.",
+        },
+        {
+            "paper_id": "sdss",
+            "title": "SDSS spectroscopic galaxy redshift sample",
+            "abstract": "Galaxy spectroscopy, redshift estimation, and sky-coordinate validation.",
+        },
+    ]
+    ranked = sorted(papers, key=lambda paper: provider._rank_paper(paper, provider._intent_terms("sdss galaxy redshift spectroscopy")), reverse=True)
+    assert ranked[0]["paper_id"] == "sdss"

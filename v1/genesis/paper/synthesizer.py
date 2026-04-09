@@ -122,11 +122,23 @@ class PaperSynthesizer:
                 "runs": [],
             }
 
-        verified_runs = [run for run in runs if run["verification"].get("passed")]
-        if not final:
-            source_runs = runs
-        else:
+        state_path = project_dir / "project_state.json"
+        project_state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+        completed_task_ids = {
+            str(item.get("task_id", ""))
+            for item in project_state.get("task_states", [])
+            if isinstance(item, dict) and str(item.get("status", "")) == "completed"
+        }
+        verified_runs = [
+            run for run in runs
+            if run["verification"].get("passed") and str(run["result"].get("task_id", "")) in completed_task_ids
+        ]
+        evidence_ready = self._has_final_evidence(verified_runs)
+        if not final or not evidence_ready:
             source_runs = verified_runs or runs
+            final = False
+        else:
+            source_runs = verified_runs
         top_metric = max((run["result"].get("primary_metric", 0.0) for run in source_runs), default=0.0)
         spec = json.loads((project_dir / "spec.json").read_text(encoding="utf-8")) if (project_dir / "spec.json").exists() else {}
         research_question = str(spec.get("research_question", "")).strip()
@@ -204,6 +216,7 @@ class PaperSynthesizer:
                 for run in source_runs
             ],
             "runs": source_runs,
+            "report_mode": "final" if final else "interim",
         }
 
     def _build_methods_text(self, runs: list[dict[str, Any]], domain_context: str) -> str:
@@ -212,8 +225,9 @@ class PaperSynthesizer:
             result = run["result"]
             artifacts = result.get("generated_artifacts", [])
             commands = result.get("executed_commands", [])
+            task_kind = result.get("task_kind", result.get("stage", "unknown"))
             line = (
-                f"Run {index} focused on task {result.get('task_id', 'unknown')} using provider "
+                f"Run {index} focused on {task_kind} task {result.get('task_id', 'unknown')} using provider "
                 f"{result.get('agent_runtime', {}).get('provider', 'n/a')} and model "
                 f"{result.get('agent_runtime', {}).get('model', 'n/a')}."
             )
@@ -231,9 +245,10 @@ class PaperSynthesizer:
         for index, run in enumerate(runs, start=1):
             result = run["result"]
             verification = run["verification"]
+            task_kind = result.get("task_kind", result.get("stage", "unknown"))
             blocks.append(
                 self._escape_latex(
-                    f"Run {index} summary: {result.get('summary', 'n/a')} "
+                    f"Run {index} ({task_kind}) summary: {result.get('summary', 'n/a')} "
                     f"Primary metric={result.get('primary_metric', 0.0)}. "
                     f"Verification passed={verification.get('passed', False)}."
                 )
@@ -288,7 +303,7 @@ class PaperSynthesizer:
                 trajectory = selected["trajectory"]
                 break
         if not trajectory:
-            metrics = [run["result"].get("primary_metric", 0.0) for run in runs]
+            metrics = [run["result"].get("primary_metric", 0.0) for run in runs if run["result"].get("task_kind") in {"acquire_data", "analyze", "verify"}]
             if len(metrics) > 1:
                 trajectory = metrics
         if not trajectory:
@@ -312,6 +327,10 @@ class PaperSynthesizer:
             "\\caption{Metric trajectory across the best available results.}\n"
             "\\end{figure}\n"
         )
+
+    def _has_final_evidence(self, runs: list[dict[str, Any]]) -> bool:
+        task_kinds = {str(run["result"].get("task_kind", "")) for run in runs}
+        return {"survey", "oracle", "verify"}.issubset(task_kinds) and bool(task_kinds & {"acquire_data", "analyze"})
 
     def _escape_latex(self, text: str) -> str:
         replacements = {

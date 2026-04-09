@@ -15,6 +15,9 @@ class TaskNode:
     dependencies: list[str] = field(default_factory=list)
     success_metric: str = ""
     requires_ml_optimizer: bool = False
+    task_kind: str = "execute"
+    expected_artifacts: list[str] = field(default_factory=list)
+    execution_mode: str = "artifact_generation"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -68,16 +68,9 @@ def load_project_config(path: Union[str, Path]) -> ProjectConfig:
 def load_api_config() -> dict[str, Any]:
     dotenv = _load_dotenv()
     semantic_scholar_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY") or dotenv.get("SEMANTIC_SCHOLAR_API_KEY")
-    groq_keys = [
-        value
-        for key, value in _merged_env(dotenv).items()
-        if key.startswith("GROQ_API_KEY") and value
-    ]
-    ollama_keys = [
-        value
-        for key, value in _merged_env(dotenv).items()
-        if key.startswith("OLLAMA_API_KEY") and value
-    ]
+    merged = _merged_env(dotenv)
+    groq_keys = _collect_numbered_env_values(merged, "GROQ_API_KEY")
+    ollama_keys = _collect_numbered_env_values(merged, "OLLAMA_API_KEY")
     ollama_base_url = os.getenv("OLLAMA_BASE_URL") or dotenv.get("OLLAMA_BASE_URL") or "http://127.0.0.1:11434"
     return {
         "semantic_scholar_api_key": semantic_scholar_key,
@@ -88,20 +81,26 @@ def load_api_config() -> dict[str, Any]:
 
 
 def _load_dotenv() -> dict[str, str]:
-    candidates = [
-        Path.cwd() / ".env",
-        Path(__file__).resolve().parents[2] / ".env",
-        Path.home() / ".env",
+    roots = [
+        Path.cwd(),
+        Path(__file__).resolve().parents[2],
+        Path.home(),
     ]
-    for candidate in candidates:
-        if candidate.exists():
-            values: dict[str, str] = {}
+    for root in roots:
+        values: dict[str, str] = {}
+        candidates = [root / ".env", root / ".env.local"]
+        found = False
+        for candidate in candidates:
+            if not candidate.exists():
+                continue
+            found = True
             for line in candidate.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 key, value = line.split("=", 1)
                 values[key.strip()] = value.strip().strip('"').strip("'")
+        if found:
             return values
     return {}
 
@@ -110,3 +109,25 @@ def _merged_env(dotenv: dict[str, str]) -> dict[str, str]:
     merged = dict(dotenv)
     merged.update({key: value for key, value in os.environ.items() if value})
     return merged
+
+
+def _collect_numbered_env_values(values: dict[str, str], prefix: str) -> list[str]:
+    ordered: list[tuple[int, str]] = []
+    for key, value in values.items():
+        if not value:
+            continue
+        if key == prefix:
+            ordered.append((1, value))
+            continue
+        if not key.startswith(f"{prefix}_"):
+            continue
+        suffix = key.removeprefix(f"{prefix}_")
+        if suffix.isdigit():
+            ordered.append((int(suffix), value))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for _, value in sorted(ordered, key=lambda item: item[0]):
+        if value not in seen:
+            deduped.append(value)
+            seen.add(value)
+    return deduped

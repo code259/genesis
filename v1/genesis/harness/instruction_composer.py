@@ -16,6 +16,11 @@ class InstructionComposer:
         current_task_context: str = "",
         budget_allocations: dict[str, int] | None = None,
         requested_modules: list[str] | None = None,
+        mode: str = "initial_task_prompt",
+        workspace_root: str = "",
+        expected_artifacts: list[str] | None = None,
+        schema_blockers: list[str] | None = None,
+        task_kind: str = "execute",
     ) -> str:
         budget_lines = [
             f"- {name}: {tokens}"
@@ -32,6 +37,14 @@ class InstructionComposer:
             belief_summary=belief_summary,
             domain_context=domain_context,
         )
+        expected_artifact_lines = [
+            f"- {artifact}"
+            for artifact in (expected_artifacts or [])
+        ] or ["- No explicit artifact contract was provided."]
+        schema_blocker_lines = [
+            f"- {blocker}"
+            for blocker in (schema_blockers or [])
+        ] or ["- No schema blockers are active."]
         sections = [
             "# Objective",
             config.research_question,
@@ -54,6 +67,12 @@ class InstructionComposer:
             "# Domain Context",
             domain_context or "No domain context injected.",
             "",
+            "# Run Workspace Root",
+            workspace_root or "Use the canonical run workspace root supplied by Genesis.",
+            "",
+            "# Expected Artifacts",
+            *expected_artifact_lines,
+            "",
             "# Requested Modules",
             *module_lines,
             "",
@@ -63,17 +82,25 @@ class InstructionComposer:
             "# Blocking Findings",
             *reasoning["blocker_lines"],
             "",
+            "# Schema Blockers",
+            *schema_blocker_lines,
+            "",
             "# Adaptive Constraints",
             *reasoning["adaptive_constraints"],
             "",
+            "# Task Kind Constraints",
+            *self._task_kind_constraints(task_kind, expected_artifacts or []),
+            "",
             "# Explicit Next Action",
-            reasoning["explicit_next_action"],
+            self._mode_specific_next_action(mode, reasoning["explicit_next_action"]),
             "",
             "# Execution Contract",
             "- Return actionable work, not prose-only completion claims.",
             "- Emit at least one of: artifact_plan, command_plan, or experiment_plan.",
-            "- Commands must be literal executable shell commands.",
+            "- Helper scripts that will be executed must appear in artifact_plan.",
+            "- Commands must be literal executable shell commands or explicitly shell-wrapped structured commands.",
             "- File paths must be concrete and relative to the run workspace unless explicitly stated otherwise.",
+            "- Put transient helper scripts in the run workspace and final deliverables in the task output artifacts.",
             "- Do not propose publication, submission, or finalization unless substantive verified artifacts already exist.",
             "",
             "# Validation Expectations",
@@ -142,3 +169,44 @@ class InstructionComposer:
             "blocker_lines": blocker_lines,
             "risk_focus": risk_focus,
         }
+
+    def _mode_specific_next_action(self, mode: str, explicit_next_action: str) -> str:
+        if mode == "repair_prompt":
+            return (
+                explicit_next_action
+                + "\nReissue corrected JSON only. Fix the schema/workspace mismatch without changing the task goal."
+            )
+        if mode == "execution_followup_prompt":
+            return (
+                explicit_next_action
+                + "\nThe plan already exists. Now execute it by producing helper files, commands, and final artifacts."
+            )
+        return explicit_next_action
+
+    def _task_kind_constraints(self, task_kind: str, expected_artifacts: list[str]) -> list[str]:
+        if task_kind == "survey":
+            return [
+                "- Stay within survey scope: produce literature/context artifacts only.",
+                "- Do not create validation runners, oracle code, or downstream data-acquisition outputs in this task.",
+                f"- Focus on artifacts like: {', '.join(expected_artifacts) if expected_artifacts else 'literature_review.md, source_map.json'}.",
+            ]
+        if task_kind == "oracle":
+            return [
+                "- Produce an oracle file and its validation output.",
+                "- Do not perform downstream analysis or paper synthesis in this task.",
+            ]
+        if task_kind in {"acquire_data", "analyze"}:
+            return [
+                "- Produce real execution artifacts, not just narrative notes.",
+                "- Create helper scripts only if they are needed to generate final data or analysis outputs.",
+            ]
+        if task_kind == "verify":
+            return [
+                "- Evaluate upstream outputs; do not regenerate survey or analysis artifacts here.",
+            ]
+        if task_kind == "paper":
+            return [
+                "- Synthesize narrative/report artifacts from verified upstream evidence only.",
+                "- Do not invent new experiment or survey outputs in this task.",
+            ]
+        return ["- Keep work scoped to the active task kind."]

@@ -169,11 +169,11 @@ class CodingAgentRuntime:
                 retryable=False,
             )
         role = self.runtime.roles[role_name]
-        prompt = self._build_prompt(instruction, context, budget or {}, category, role.prompt_append)
         errors: list[str] = []
         attempted_models: list[str] = []
         last_error = ProviderRuntimeError("no provider attempts executed")
         for route in role.routes:
+            prompt = self._build_prompt(instruction, context, budget or {}, category, role.prompt_append, route)
             attempted_models.append(route.model)
             active_key = self._active_key_for_route(route)
             content = ""
@@ -387,6 +387,7 @@ class CodingAgentRuntime:
         budget: dict[str, Any],
         category: str,
         prompt_append: str,
+        route: RouteConfig,
     ) -> str:
         schema = {
             "genesis-ideation": [
@@ -420,7 +421,18 @@ class CodingAgentRuntime:
             category,
             ["summary", "artifact_plan", "command_plan", "experiment_plan", "citations", "next_action"],
         )
-        extra = f"\nAdditional routing guidance:\n{prompt_append.strip()}\n" if prompt_append.strip() else ""
+        context_payload = context
+        budget_payload = budget
+        extra_bits: list[str] = []
+        if prompt_append.strip():
+            extra_bits.append(prompt_append.strip())
+        if route.kind == "backup_light":
+            context_payload = self._compact_context(context)
+            budget_payload = {"mode": "backup_light", **{key: value for key, value in budget.items() if key in {"max_runs", "compute_budget"}}}
+            extra_bits.append(
+                "Backup-light mode: minimize context usage, prefer a compact actionable response, and avoid verbose justification."
+            )
+        extra = f"\nAdditional routing guidance:\n{chr(10).join(extra_bits)}\n" if extra_bits else ""
         return (
             "You are the Genesis execution backend running inside OpenCode with oh-my-openagent.\n"
             f"Return valid JSON only with keys: {', '.join(schema)}.\n"
@@ -430,10 +442,29 @@ class CodingAgentRuntime:
             "Do not suggest publication, submission, or finalization unless substantive verified artifacts already exist.\n"
             f"Category: {category}\n"
             f"Instruction:\n{instruction}\n\n"
-            f"Context:\n{json.dumps(context, indent=2)}\n\n"
-            f"Budget:\n{json.dumps(budget, indent=2)}\n"
+            f"Context:\n{json.dumps(context_payload, indent=2)}\n\n"
+            f"Budget:\n{json.dumps(budget_payload, indent=2)}\n"
             f"{extra}"
         )
+
+    def _compact_context(self, context: dict[str, Any]) -> dict[str, Any]:
+        compact: dict[str, Any] = {}
+        for key in ("task_id", "research_question", "domain", "failed_iterations", "debug_focus", "verification_failures"):
+            if key in context:
+                compact[key] = context[key]
+        prior_runs = context.get("prior_runs", [])
+        if isinstance(prior_runs, list) and prior_runs:
+            compact["prior_runs"] = [
+                {
+                    "run_n": run.get("run_n"),
+                    "classification": run.get("classification", ""),
+                    "failure_type": run.get("failure_type", ""),
+                    "debug_focus": run.get("debug_focus", ""),
+                }
+                for run in prior_runs[-2:]
+                if isinstance(run, dict)
+            ]
+        return compact or context
 
     def _invoke_opencode(
         self,
@@ -514,6 +545,8 @@ class CodingAgentRuntime:
             env["OPENCODE_CONFIG"] = str(self.runtime.config_path)
         if self.runtime.config_dir is not None:
             env["OPENCODE_CONFIG_DIR"] = str(self.runtime.config_dir)
+        self._inject_numbered_env(env, "OLLAMA_API_KEY", self.api_config["ollama_api_keys"])
+        self._inject_numbered_env(env, "GROQ_API_KEY", self.api_config["groq_api_keys"])
         if route.provider == "groq":
             self._unset_prefixed_keys(env, "GROQ_API_KEY")
             if active_key:
@@ -532,10 +565,15 @@ class CodingAgentRuntime:
             if key == prefix or key.startswith(f"{prefix}_"):
                 env.pop(key, None)
 
+    def _inject_numbered_env(self, env: dict[str, str], prefix: str, values: list[str]) -> None:
+        for index, value in enumerate(values, start=1):
+            key = prefix if index == 1 else f"{prefix}_{index}"
+            env[key] = value
+
     def _active_key_for_route(self, route: RouteConfig) -> Optional[str]:
-        if route.provider != "groq":
-            return None
-        return self.groq_scheduler.choose_key()
+        if route.provider == "groq":
+            return self.groq_scheduler.choose_key()
+        return None
 
     def _role_presence_checks(self) -> list[dict[str, Any]]:
         checks: list[dict[str, Any]] = []
@@ -733,6 +771,7 @@ class CodingAgentRuntime:
             if isinstance(item, dict) and str(item.get("path", "")).strip()
         }
         for command_entry in payload.get("command_plan", []):
+            self._validate_command_entry(command_entry)
             command = self._command_tokens(command_entry)
             referenced_file = self._workspace_file_reference(command)
             if referenced_file and referenced_file not in artifact_paths:
@@ -742,6 +781,46 @@ class CodingAgentRuntime:
                     retryable=True,
                 )
         return "actionable"
+
+    def _validate_command_entry(self, entry: Any) -> None:
+        if isinstance(entry, str) and entry.strip():
+            if self._requires_shell_wrapper(entry) and not self._is_shell_wrapped_string(entry):
+                raise ProviderRuntimeError(
+                    "command_plan contains shell syntax and must be wrapped explicitly with bash -lc or zsh -lc",
+                    error_class="command_plan_requires_shell_wrapper",
+                    retryable=True,
+                )
+            return
+        if not isinstance(entry, dict):
+            return
+        command_value = entry.get("command")
+        if isinstance(command_value, str) and command_value.strip():
+            if self._requires_shell_wrapper(command_value) and not self._is_shell_wrapped_string(command_value):
+                raise ProviderRuntimeError(
+                    "structured command_plan contains shell syntax and must be wrapped explicitly with bash -lc or zsh -lc",
+                    error_class="command_plan_requires_shell_wrapper",
+                    retryable=True,
+                )
+        elif isinstance(command_value, list) and all(isinstance(part, str) for part in command_value):
+            if self._requires_shell_wrapper(" ".join(command_value)) and not self._is_shell_wrapped_list(command_value):
+                raise ProviderRuntimeError(
+                    "structured command_plan contains shell syntax and must be wrapped explicitly with bash -lc or zsh -lc",
+                    error_class="command_plan_requires_shell_wrapper",
+                    retryable=True,
+                )
+
+    def _requires_shell_wrapper(self, command: str) -> bool:
+        return any(token in command for token in ("&&", "||", "|", ";", ">", "<", "$(", "`"))
+
+    def _is_shell_wrapped_string(self, command: str) -> bool:
+        lowered = command.strip().lower()
+        return lowered.startswith("bash -lc ") or lowered.startswith("zsh -lc ") or lowered.startswith("/bin/bash -lc ") or lowered.startswith("/bin/zsh -lc ")
+
+    def _is_shell_wrapped_list(self, command: list[str]) -> bool:
+        if len(command) < 3:
+            return False
+        executable = command[0].lower()
+        return executable in {"bash", "zsh", "/bin/bash", "/bin/zsh"} and command[1] == "-lc"
 
     def _payload_has_meaningful_plan(self, payload: dict[str, Any]) -> bool:
         summary = str(payload.get("summary", "")).strip()

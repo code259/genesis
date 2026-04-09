@@ -18,25 +18,30 @@ class VerificationPipeline:
         outputs_dir: Union[str, Path],
         project_id: str,
         oracle_path: Optional[Union[str, Path]] = None,
+        task_kind: str = "",
+        expected_artifacts: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         outputs_dir = Path(outputs_dir)
         report: dict[str, Any] = {
             "project_id": project_id,
             "outputs_dir": str(outputs_dir),
+            "task_kind": task_kind,
             "checks": [],
         }
-        results_file = outputs_dir / "result.json"
+        results_file = self._result_path(outputs_dir)
         if results_file.exists():
             result_payload = self._load_result(results_file)
             report["checks"].append({"name": "artifact_exists", "passed": True})
+            report["checks"].append(self._expected_artifact_check(result_payload, expected_artifacts or []))
             report["checks"].append(self._substantive_artifact_check(result_payload))
-            drift_targets = self._implementation_targets(outputs_dir, result_payload)
-            report["checks"].append(
-                self.formal.check_implementation_drift(
-                    str(result_payload.get("summary", "")),
-                    drift_targets,
-                ).to_dict()
-            )
+            if task_kind not in {"survey", "paper"}:
+                drift_targets = self._implementation_targets(outputs_dir, result_payload)
+                report["checks"].append(
+                    self.formal.check_implementation_drift(
+                        str(result_payload.get("summary", "")),
+                        drift_targets,
+                    ).to_dict()
+                )
             report["checks"].append(self._metric_consistency_check(result_payload))
         else:
             report["checks"].append({"name": "artifact_exists", "passed": False})
@@ -49,13 +54,15 @@ class VerificationPipeline:
             synthetic_result["name"] = "oracle_synthetic_validation"
             report["checks"].append(synthetic_result)
         citation_flags = self._citation_check(outputs_dir)
-        if citation_flags:
-            report["checks"].append({"name": "citation_verification", "passed": False, "flags": citation_flags})
-        else:
-            report["checks"].append({"name": "citation_verification", "passed": True})
-        paper_artifact_check = self._paper_artifact_check(outputs_dir)
-        if paper_artifact_check is not None:
-            report["checks"].append(paper_artifact_check)
+        if task_kind in {"", "survey", "paper"}:
+            if citation_flags:
+                report["checks"].append({"name": "citation_verification", "passed": False, "flags": citation_flags})
+            else:
+                report["checks"].append({"name": "citation_verification", "passed": True})
+        if task_kind in {"", "paper"}:
+            paper_artifact_check = self._paper_artifact_check(outputs_dir)
+            if paper_artifact_check is not None:
+                report["checks"].append(paper_artifact_check)
         report["passed"] = all(self._is_check_passing(check) for check in report["checks"])
         return report
 
@@ -79,11 +86,19 @@ class VerificationPipeline:
 
     def _substantive_artifact_check(self, payload: dict[str, Any]) -> dict[str, Any]:
         generated_artifacts = payload.get("generated_artifacts", [])
+        artifact_records = payload.get("artifact_records", [])
         executed_commands = payload.get("executed_commands", [])
         command_results = payload.get("command_results", [])
         selected_experiment = payload.get("selected_experiment")
         code_path = str(payload.get("code_path", "")).strip()
         has_generated_artifacts = isinstance(generated_artifacts, list) and bool(generated_artifacts)
+        has_nonempty_artifacts = (
+            isinstance(artifact_records, list)
+            and any(
+                isinstance(item, dict) and bool(item.get("substantive")) and int(item.get("size_bytes", 0)) > 0
+                for item in artifact_records
+            )
+        )
         has_successful_commands = (
             isinstance(command_results, list)
             and any(
@@ -95,18 +110,35 @@ class VerificationPipeline:
         has_executed_commands = isinstance(executed_commands, list) and bool(executed_commands)
         has_selected_experiment = isinstance(selected_experiment, dict) and bool(selected_experiment)
         has_code_path = bool(code_path)
-        passed = has_generated_artifacts or has_successful_commands or has_selected_experiment or has_code_path
+        passed = has_nonempty_artifacts or has_successful_commands or has_selected_experiment or (has_code_path and has_generated_artifacts)
         return {
             "name": "substantive_artifacts",
             "passed": passed,
             "evidence": [
                 f"generated_artifacts={len(generated_artifacts) if isinstance(generated_artifacts, list) else 0}",
+                f"nonempty_artifacts={sum(1 for item in artifact_records if isinstance(item, dict) and bool(item.get('substantive')) and int(item.get('size_bytes', 0)) > 0) if isinstance(artifact_records, list) else 0}",
                 f"executed_commands={len(executed_commands) if isinstance(executed_commands, list) else 0}",
                 f"successful_commands={sum(1 for item in command_results if isinstance(item, dict) and int(item.get('returncode', 1)) == 0) if isinstance(command_results, list) else 0}",
                 f"task_relevant_successful_commands={sum(1 for item in command_results if isinstance(item, dict) and int(item.get('returncode', 1)) == 0 and not self._is_setup_command(str(item.get('command', '')))) if isinstance(command_results, list) else 0}",
                 f"has_selected_experiment={has_selected_experiment}",
                 f"has_code_path={has_code_path}",
             ],
+        }
+
+    def _expected_artifact_check(self, payload: dict[str, Any], expected_artifacts: list[str]) -> dict[str, Any]:
+        if not expected_artifacts:
+            return {"name": "expected_artifacts", "passed": True}
+        records = payload.get("artifact_records", [])
+        present = {
+            Path(str(item.get("path", ""))).name
+            for item in records
+            if isinstance(item, dict) and bool(item.get("substantive"))
+        }
+        missing = [artifact for artifact in expected_artifacts if artifact not in present]
+        return {
+            "name": "expected_artifacts",
+            "passed": not missing,
+            "evidence": [f"missing={missing}" if missing else "all_expected_present"],
         }
 
     def _implementation_targets(self, outputs_dir: Path, payload: dict[str, Any]) -> list[Path]:
@@ -135,19 +167,25 @@ class VerificationPipeline:
         return lowered.startswith("pip install") or lowered.startswith("python -m pip install")
 
     def _citation_check(self, outputs_dir: Path) -> list[dict[str, Any]]:
-        paper_dir = outputs_dir.parent / "paper"
+        project_dir = self._project_dir(outputs_dir)
+        paper_dir = project_dir / "outputs" / "paper"
+        if not paper_dir.exists() and (project_dir / "paper").exists():
+            paper_dir = project_dir / "paper"
         tex_path = paper_dir / "main.tex"
         bib_path = paper_dir / "references.bib"
         if not tex_path.exists() or not bib_path.exists():
             return []
-        agent = CitationsAgent(outputs_dir.parent.parent / "knowledge" / "citations_cache.json")
+        agent = CitationsAgent(project_dir / "knowledge" / "citations_cache.json")
         return agent.verify_all_in_latex(
             tex_path.read_text(encoding="utf-8"),
             bib_path.read_text(encoding="utf-8"),
         )
 
     def _paper_artifact_check(self, outputs_dir: Path) -> dict[str, Any] | None:
-        paper_dir = outputs_dir.parent / "paper"
+        project_dir = self._project_dir(outputs_dir)
+        paper_dir = project_dir / "outputs" / "paper"
+        if not paper_dir.exists() and (project_dir / "paper").exists():
+            paper_dir = project_dir / "paper"
         if not paper_dir.exists():
             return None
         required = {
@@ -172,3 +210,23 @@ class VerificationPipeline:
         if "pass_rate" in check:
             return float(check["pass_rate"]) > 0.0
         return True
+
+    def _result_path(self, outputs_dir: Path) -> Path:
+        direct = outputs_dir / "result.json"
+        if direct.exists():
+            return direct
+        sibling = outputs_dir.parent / "result.json"
+        if sibling.exists():
+            return sibling
+        return direct
+
+    def _project_dir(self, outputs_dir: Path) -> Path:
+        if (outputs_dir.parent / "paper").exists():
+            return outputs_dir.parent
+        if outputs_dir.name == "artifacts" and outputs_dir.parent.parent.name == "runs":
+            return outputs_dir.parents[2]
+        if outputs_dir.parent.name == "paper" and outputs_dir.parent.parent.name == "outputs":
+            return outputs_dir.parents[2]
+        if outputs_dir.parent.name == "code" and outputs_dir.parent.parent.name == "outputs":
+            return outputs_dir.parents[2]
+        return outputs_dir.parents[1]

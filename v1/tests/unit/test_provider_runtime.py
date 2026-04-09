@@ -207,6 +207,40 @@ def test_provider_runtime_requires_artifact_for_workspace_script_command(tmp_pat
     assert excinfo.value.error_class == "command_plan_missing_artifact"
 
 
+def test_provider_runtime_requires_shell_wrapper_for_shell_operators(tmp_path):
+    class _MinimalSession:
+        def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
+            return _Response(
+                {
+                    "message": {
+                        "content": '{"summary":"ok","artifact_plan":[{"path":"notes.md","content":"ok"}],"command_plan":["cat notes.md > out.md"],"next_action":"continue"}'
+                    }
+                }
+            )
+
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(
+        json_module.dumps(
+            {
+                "categories": {
+                    "sisyphus": {
+                        "provider": "ollama",
+                        "model": "test-model",
+                        "fallbacks": [],
+                        "temperature": 0.2,
+                        "max_tokens": 100,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = CodingAgentRuntime(config_path, session=_MinimalSession())
+    with pytest.raises(ProviderRuntimeError) as excinfo:
+        runtime.generate_task(category="sisyphus", instruction="do work", context={"task": "x"})
+    assert excinfo.value.error_class == "command_plan_requires_shell_wrapper"
+
+
 def test_provider_runtime_reports_unknown_category(tmp_path):
     config_path = tmp_path / "runtime.json"
     config_path.write_text('{"categories": {}}', encoding="utf-8")
@@ -241,4 +275,4 @@ def test_provider_runtime_accepts_legacy_providers_key(tmp_path):
 def test_live_runtime_config_prefers_ollama_cloud():
     config_path = "/Users/nikhilmaturi/Files/Projects/genesis/v1/configs/runtime_omo.jsonc"
     runtime = CodingAgentRuntime(config_path, session=_Session())
-    assert runtime.categories["sisyphus"].model == "ollama-cloud/glm-5:cloud"
+    assert runtime.categories["sisyphus"].model == "ollama-cloud-1/glm-5:cloud"

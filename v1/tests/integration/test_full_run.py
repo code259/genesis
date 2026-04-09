@@ -3,9 +3,9 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from genesis.agents.runtime import CodingAgentRuntime
+from genesis.agents.runtime import CodingAgentRuntime, ProviderRuntimeError
 from genesis.cli.main import main
-from genesis.models import StoppingDecision
+from genesis.models import StoppingDecision, TaskNode, TaskTree
 
 
 class _PassingReport:
@@ -87,7 +87,7 @@ def test_full_run_completes_with_stage_progression(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr("genesis.harness.loop.MetaHarnessLoop._run_adversarial_check", lambda self, outputs, criteria, **kwargs: _PassingReport())
-    monkeypatch.setattr("genesis.modules.verification.pipeline.VerificationPipeline.run", lambda self, outputs_dir, project_id, oracle_path=None: {"passed": True, "checks": []})
+    monkeypatch.setattr("genesis.modules.verification.pipeline.VerificationPipeline.run", lambda self, outputs_dir, project_id, oracle_path=None, **kwargs: {"passed": True, "checks": []})
     monkeypatch.setattr(
         "genesis.modules.oracle.validator.OracleValidator.validate_with_synthetic_data",
         lambda self, oracle_path: {"name": "synthetic_oracle_validation", "passed": True, "result": {"pass_rate": 1.0}},
@@ -104,6 +104,46 @@ def test_full_run_completes_with_stage_progression(tmp_path, monkeypatch):
     assert state["task_states"]
     assert (tmp_path / "projects" / "demo1234" / "runs" / "2" / "verification_report.json").exists()
     assert (tmp_path / "projects" / "demo1234" / "outputs" / "paper" / "synthesis_report.json").exists()
+
+
+def test_repairable_schema_mismatch_does_not_halt_project(tmp_path, monkeypatch):
+    _patch_runtime_ok(monkeypatch)
+    calls = {"count": 0}
+
+    def _runtime(self, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ProviderRuntimeError(
+                "command_plan references workspace file 'validate.py' without creating it in artifact_plan",
+                error_class="command_plan_missing_artifact",
+                retryable=False,
+            )
+        return {
+            "summary": "Repaired and executed task successfully.",
+            "artifact_plan": [{"path": "result.txt", "content": "ok"}],
+            "command_plan": [],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+        }
+
+    monkeypatch.setattr(CodingAgentRuntime, "generate_task", _runtime)
+    monkeypatch.setattr("genesis.harness.loop.MetaHarnessLoop._run_adversarial_check", lambda self, outputs, criteria, **kwargs: _PassingReport())
+    monkeypatch.setattr("genesis.modules.verification.pipeline.VerificationPipeline.run", lambda self, outputs_dir, project_id, oracle_path=None, **kwargs: {"passed": True, "checks": []})
+    monkeypatch.setattr(
+        "genesis.modules.oracle.validator.OracleValidator.validate_with_synthetic_data",
+        lambda self, oracle_path: {"name": "synthetic_oracle_validation", "passed": True, "result": {"pass_rate": 1.0}},
+    )
+
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(main, ["run", "--project-id", "repair01", "--spec", _spec_path(tmp_path, "repair schema"), "--max-runs", "4"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] in {"complete", "incomplete"}
+    assert not (tmp_path / "projects" / "repair01" / "HALT.json").exists()
 
 
 def test_runtime_health_failure_halts_before_execution(tmp_path, monkeypatch):
@@ -133,6 +173,24 @@ def test_existing_halt_refuses_restart(tmp_path, monkeypatch):
 
 def test_oracle_validation_failure_halts_project(tmp_path, monkeypatch):
     _patch_runtime_ok(monkeypatch)
+    monkeypatch.setattr(
+        "genesis.harness.decomposer.TaskDecomposer.decompose",
+        lambda self, config: TaskTree(
+            root_id="oracle",
+            tasks=[
+                TaskNode(
+                    task_id="oracle-task",
+                    description="Generate and validate an oracle",
+                    acceptance_criteria=["validated oracle"],
+                    oracle_checks=[],
+                    estimated_compute_budget="local_cpu",
+                    task_kind="oracle",
+                    expected_artifacts=["oracle.py"],
+                    execution_mode="artifact_generation",
+                )
+            ],
+        ),
+    )
     monkeypatch.setattr(
         CodingAgentRuntime,
         "generate_task",
@@ -178,7 +236,7 @@ def test_max_runs_exhaustion_returns_incomplete(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr("genesis.harness.loop.MetaHarnessLoop._run_adversarial_check", lambda self, outputs, criteria, **kwargs: _FailingReport())
-    monkeypatch.setattr("genesis.modules.verification.pipeline.VerificationPipeline.run", lambda self, outputs_dir, project_id, oracle_path=None: {"passed": False, "checks": []})
+    monkeypatch.setattr("genesis.modules.verification.pipeline.VerificationPipeline.run", lambda self, outputs_dir, project_id, oracle_path=None, **kwargs: {"passed": False, "checks": []})
     monkeypatch.setattr(
         "genesis.modules.oracle.validator.OracleValidator.validate_with_synthetic_data",
         lambda self, oracle_path: {"name": "synthetic_oracle_validation", "passed": True, "result": {"pass_rate": 1.0}},

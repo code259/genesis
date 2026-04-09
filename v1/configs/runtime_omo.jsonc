@@ -21,10 +21,21 @@
         "agent": "",
         "prompt_append": "Prefer cloud-first execution. Use local Ollama only as a final degraded fallback after cloud paths fail.",
         "routes": [
-          {"provider": "ollama-cloud", "model": "ollama-cloud/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
-          {"provider": "groq", "model": "groq/openai/gpt-oss-120b", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
-          {"provider": "groq", "model": "groq/llama-3.3-70b-versatile", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
-          {"provider": "groq", "model": "groq/qwen/qwen3-32b", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
+          {"provider": "ollama-cloud-1", "model": "ollama-cloud-1/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
+          {"provider": "ollama-cloud-2", "model": "ollama-cloud-2/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
+          {"provider": "ollama-cloud-3", "model": "ollama-cloud-3/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
+          {"provider": "ollama-cloud-4", "model": "ollama-cloud-4/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
+          {"provider": "ollama-cloud-5", "model": "ollama-cloud-5/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
+          {"provider": "ollama-cloud-6", "model": "ollama-cloud-6/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
+          {"provider": "ollama-cloud-7", "model": "ollama-cloud-7/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
+          {"provider": "ollama-cloud-8", "model": "ollama-cloud-8/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 4000},
+          {"provider": "groq-1", "model": "groq-1/qwen/qwen3-32b", "kind": "backup_light", "temperature": 0.1, "max_tokens": 1200},
+          {"provider": "groq-2", "model": "groq-2/qwen/qwen3-32b", "kind": "backup_light", "temperature": 0.1, "max_tokens": 1200},
+          {"provider": "groq-3", "model": "groq-3/qwen/qwen3-32b", "kind": "backup_light", "temperature": 0.1, "max_tokens": 1200},
+          {"provider": "groq-4", "model": "groq-4/llama-3.3-70b-versatile", "kind": "backup_light", "temperature": 0.1, "max_tokens": 1200},
+          {"provider": "groq-5", "model": "groq-5/llama-3.3-70b-versatile", "kind": "backup_light", "temperature": 0.1, "max_tokens": 1200},
+          {"provider": "groq-6", "model": "groq-6/openai/gpt-oss-120b", "kind": "backup_light", "temperature": 0.1, "max_tokens": 1200},
+          {"provider": "groq-7", "model": "groq-7/openai/gpt-oss-120b", "kind": "backup_light", "temperature": 0.1, "max_tokens": 1200},
           {"provider": "ollama-local", "model": "ollama-local/gemma4:e4b", "kind": "local", "temperature": 0.2, "max_tokens": 3000},
           {"provider": "ollama-local", "model": "ollama-local/llama3.2:3b", "kind": "local", "temperature": 0.2, "max_tokens": 3000}
         ]
@@ -32,39 +43,45 @@
       "oracle": {
         "agent": "",
         "routes": [
-          {"provider": "ollama-cloud", "model": "ollama-cloud/glm-5:cloud", "kind": "cloud", "temperature": 0.0, "max_tokens": 2500},
-          {"provider": "groq", "model": "groq/openai/gpt-oss-120b", "kind": "cloud", "temperature": 0.0, "max_tokens": 2500},
-          {"provider": "groq", "model": "groq/llama-3.3-70b-versatile", "kind": "cloud", "temperature": 0.0, "max_tokens": 2500},
-          {"provider": "groq", "model": "groq/qwen/qwen3-32b", "kind": "cloud", "temperature": 0.0, "max_tokens": 2500},
+          {"provider": "ollama-cloud-1", "model": "ollama-cloud-1/glm-5:cloud", "kind": "cloud", "temperature": 0.0, "max_tokens": 2500},
+          {"provider": "ollama-cloud-2", "model": "ollama-cloud-2/glm-5:cloud", "kind": "cloud", "temperature": 0.0, "max_tokens": 2500},
+          {"provider": "ollama-cloud-3", "model": "ollama-cloud-3/glm-5:cloud", "kind": "cloud", "temperature": 0.0, "max_tokens": 2500},
+          {"provider": "ollama-cloud-4", "model": "ollama-cloud-4/glm-5:cloud", "kind": "cloud", "temperature": 0.0, "max_tokens": 2500},
+          {"provider": "groq-1", "model": "groq-1/qwen/qwen3-32b", "kind": "backup_light", "temperature": 0.0, "max_tokens": 1000},
+          {"provider": "groq-2", "model": "groq-2/llama-3.3-70b-versatile", "kind": "backup_light", "temperature": 0.0, "max_tokens": 1000},
+          {"provider": "groq-3", "model": "groq-3/openai/gpt-oss-120b", "kind": "backup_light", "temperature": 0.0, "max_tokens": 1000},
           {"provider": "ollama-local", "model": "ollama-local/gemma4:e4b", "kind": "local", "temperature": 0.0, "max_tokens": 2500}
         ]
       },
       "adversarial": {
         "agent": "",
         "routes": [
-          {"provider": "ollama-cloud", "model": "ollama-cloud/glm-5:cloud", "kind": "cloud", "temperature": 0.1, "max_tokens": 2500},
-          {"provider": "groq", "model": "groq/openai/gpt-oss-120b", "kind": "cloud", "temperature": 0.1, "max_tokens": 2500},
-          {"provider": "groq", "model": "groq/llama-3.3-70b-versatile", "kind": "cloud", "temperature": 0.1, "max_tokens": 2500},
-          {"provider": "groq", "model": "groq/qwen/qwen3-32b", "kind": "cloud", "temperature": 0.1, "max_tokens": 2500},
+          {"provider": "ollama-cloud-1", "model": "ollama-cloud-1/glm-5:cloud", "kind": "cloud", "temperature": 0.1, "max_tokens": 2500},
+          {"provider": "ollama-cloud-2", "model": "ollama-cloud-2/glm-5:cloud", "kind": "cloud", "temperature": 0.1, "max_tokens": 2500},
+          {"provider": "groq-1", "model": "groq-1/qwen/qwen3-32b", "kind": "backup_light", "temperature": 0.1, "max_tokens": 1000},
+          {"provider": "groq-2", "model": "groq-2/llama-3.3-70b-versatile", "kind": "backup_light", "temperature": 0.1, "max_tokens": 1000},
+          {"provider": "groq-3", "model": "groq-3/openai/gpt-oss-120b", "kind": "backup_light", "temperature": 0.1, "max_tokens": 1000},
           {"provider": "ollama-local", "model": "ollama-local/gemma4:e4b", "kind": "local", "temperature": 0.1, "max_tokens": 2500}
         ]
       },
       "writer": {
         "agent": "",
         "routes": [
-          {"provider": "ollama-cloud", "model": "ollama-cloud/glm-5:cloud", "kind": "cloud", "temperature": 0.3, "max_tokens": 3500},
-          {"provider": "groq", "model": "groq/openai/gpt-oss-120b", "kind": "cloud", "temperature": 0.3, "max_tokens": 3500},
-          {"provider": "groq", "model": "groq/llama-3.3-70b-versatile", "kind": "cloud", "temperature": 0.3, "max_tokens": 3500},
-          {"provider": "groq", "model": "groq/qwen/qwen3-32b", "kind": "cloud", "temperature": 0.3, "max_tokens": 3500},
+          {"provider": "ollama-cloud-1", "model": "ollama-cloud-1/glm-5:cloud", "kind": "cloud", "temperature": 0.3, "max_tokens": 3500},
+          {"provider": "ollama-cloud-2", "model": "ollama-cloud-2/glm-5:cloud", "kind": "cloud", "temperature": 0.3, "max_tokens": 3500},
+          {"provider": "groq-1", "model": "groq-1/qwen/qwen3-32b", "kind": "backup_light", "temperature": 0.2, "max_tokens": 1000},
+          {"provider": "groq-2", "model": "groq-2/llama-3.3-70b-versatile", "kind": "backup_light", "temperature": 0.2, "max_tokens": 1000},
+          {"provider": "groq-3", "model": "groq-3/openai/gpt-oss-120b", "kind": "backup_light", "temperature": 0.2, "max_tokens": 1000},
           {"provider": "ollama-local", "model": "ollama-local/gemma4:e4b", "kind": "local", "temperature": 0.3, "max_tokens": 2500}
         ]
       },
       "quick": {
         "agent": "explore",
         "routes": [
-          {"provider": "ollama-cloud", "model": "ollama-cloud/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 2000},
-          {"provider": "groq", "model": "groq/llama-3.3-70b-versatile", "kind": "cloud", "temperature": 0.2, "max_tokens": 2000},
-          {"provider": "groq", "model": "groq/qwen/qwen3-32b", "kind": "cloud", "temperature": 0.2, "max_tokens": 2000},
+          {"provider": "ollama-cloud-1", "model": "ollama-cloud-1/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 2000},
+          {"provider": "ollama-cloud-2", "model": "ollama-cloud-2/glm-5:cloud", "kind": "cloud", "temperature": 0.2, "max_tokens": 2000},
+          {"provider": "groq-1", "model": "groq-1/qwen/qwen3-32b", "kind": "backup_light", "temperature": 0.2, "max_tokens": 800},
+          {"provider": "groq-2", "model": "groq-2/llama-3.3-70b-versatile", "kind": "backup_light", "temperature": 0.2, "max_tokens": 800},
           {"provider": "ollama-local", "model": "ollama-local/gemma4:e4b", "kind": "local", "temperature": 0.2, "max_tokens": 1500}
         ]
       }

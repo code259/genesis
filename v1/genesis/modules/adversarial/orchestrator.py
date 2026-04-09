@@ -98,6 +98,11 @@ class AdversarialOrchestrator:
             | {flag for flag in literature_flags}
             | {flag for flag in claim_flags}
         )
+        critical_blockers = self._filter_blockers_for_task(
+            critical_blockers,
+            task_kind=str((task_context or {}).get("task_kind", "")),
+            expected_artifacts=[str(item) for item in (task_context or {}).get("expected_artifacts", []) if str(item).strip()],
+        )
         report = AdversarialReport(
             generated_criteria=generated_criteria,
             criteria_findings=criteria_findings,
@@ -116,6 +121,27 @@ class AdversarialOrchestrator:
         )
         report.stopping_decision = self._evaluate_stopping_criteria(report)
         return report
+
+    def _filter_blockers_for_task(self, blockers: list[str], *, task_kind: str, expected_artifacts: list[str]) -> list[str]:
+        task_kind = task_kind.strip().lower()
+        expected_lower = [artifact.lower() for artifact in expected_artifacts]
+        filtered: list[str] = []
+        seen: set[str] = set()
+        for blocker in blockers:
+            normalized = blocker.strip()
+            lowered = normalized.lower()
+            if task_kind == "survey":
+                if any(token in lowered for token in ("validation_artifact", "validation runner", "sample_data", "oracle.py", "paper_artifacts", "compute budget")):
+                    if not any(token in lowered for token in expected_lower):
+                        continue
+            if task_kind == "oracle" and any(token in lowered for token in ("paper_artifacts", "literature_review", "source_map")):
+                continue
+            if task_kind in {"acquire_data", "analyze"} and "paper_artifacts" in lowered:
+                continue
+            if normalized not in seen:
+                filtered.append(normalized)
+                seen.add(normalized)
+        return filtered
 
     def _run_criteria_attacker(
         self,

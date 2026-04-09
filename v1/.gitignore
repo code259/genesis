@@ -14,5 +14,8 @@ projects/
 taste_db/
 manifold_index/
 output/
+.env.local
+.env.*
+!.env.example
 *.sqlite3
 *.db

@@ -38,6 +38,8 @@ def test_instruction_composer_has_sections():
     assert "# Validation Expectations" in instruction
     assert "# Risk Focus" in instruction
     assert "# Blocking Findings" in instruction
+    assert "# Run Workspace Root" in instruction
+    assert "# Expected Artifacts" in instruction
 
 
 def test_instruction_composer_adapts_to_blockers_and_verification():
@@ -217,6 +219,7 @@ def test_default_executor_runs_generic_command_plan(tmp_path, monkeypatch):
             estimated_compute_budget="local_cpu",
             requires_ml_optimizer=False,
         ),
+        instruction="Execute the task and produce a real artifact.",
         optimizer=None,
         ledger=None,
         ideation=None,
@@ -227,4 +230,182 @@ def test_default_executor_runs_generic_command_plan(tmp_path, monkeypatch):
     payload = result["result"]
     assert payload["executed_commands"] == ["python3 writer.py"]
     assert any(path.endswith("output.txt") for path in payload["generated_artifacts"])
-    assert Path(payload["artifact_dir"], "result.json").exists()
+    assert Path(payload["artifact_dir"]).name == "artifacts"
+    assert Path(payload["resolved_workspace"]).name == "workspace"
+    assert Path(payload["artifact_manifest_path"]).exists()
+
+
+def test_default_executor_ignores_empty_artifacts(tmp_path, monkeypatch):
+    loop = MetaHarnessLoop(
+        projects_root=tmp_path / "projects",
+        taste_root=tmp_path / "taste_db",
+    )
+    project_dir = loop.filesystem.init_project(
+        "demo-empty",
+        {
+            "research_question": "Generate an empty file",
+            "domain": "general",
+            "compute_budget": "local_cpu",
+            "time_budget_hours": 1,
+            "domain_knowledge_model": "none",
+            "output_dir": str(tmp_path / "projects"),
+            "success_criteria": ["Generate an empty file"],
+            "oracle_hints": [],
+        },
+    )
+    monkeypatch.setattr(
+        loop.agent_runtime,
+        "generate_task",
+        lambda **kwargs: {
+            "summary": "Created an empty artifact only.",
+            "artifact_plan": [{"path": "empty.txt", "content": ""}],
+            "command_plan": [],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+        },
+    )
+    result = loop._default_executor(
+        project_dir=project_dir,
+        run_n=1,
+        config=ProjectConfig(
+            research_question="Generate an empty file",
+            domain="general",
+            compute_budget="local_cpu",
+            time_budget_hours=1,
+            domain_knowledge_model="none",
+            output_dir=str(tmp_path / "projects"),
+            success_criteria=["Generate an empty file"],
+            oracle_hints=[],
+        ),
+        task_node=TaskNode(
+            task_id="task",
+            description="Generate an empty file",
+            acceptance_criteria=[],
+            oracle_checks=[],
+            estimated_compute_budget="local_cpu",
+            requires_ml_optimizer=False,
+        ),
+        instruction="Execute the task and produce a real artifact.",
+        optimizer=None,
+        ledger=None,
+        ideation=None,
+        oracle_resolver=None,
+        failed_iterations=0,
+        taste_model=None,
+    )
+    payload = result["result"]
+    assert payload["classification"] == "non_substantive_completion"
+    assert payload["generated_artifacts"] == []
+    assert any(record["size_bytes"] == 0 for record in payload["artifact_records"])
+
+
+def test_default_executor_turns_plan_into_execution_followup(tmp_path, monkeypatch):
+    loop = MetaHarnessLoop(
+        projects_root=tmp_path / "projects",
+        taste_root=tmp_path / "taste_db",
+    )
+    project_dir = loop.filesystem.init_project(
+        "demo-plan",
+        {
+            "research_question": "Plan then execute",
+            "domain": "general",
+            "compute_budget": "local_cpu",
+            "time_budget_hours": 1,
+            "domain_knowledge_model": "none",
+            "output_dir": str(tmp_path / "projects"),
+            "success_criteria": ["Produce a real artifact"],
+            "oracle_hints": [],
+        },
+    )
+    responses = [
+        {
+            "summary": "Execution plan only.",
+            "artifact_plan": [],
+            "command_plan": [],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+            "validation_mode": "relaxed_plan_only",
+            "raw_response": "{\"summary\":\"Execution plan only.\"}",
+        },
+        {
+            "summary": "Executed the planned work.",
+            "artifact_plan": [{"path": "final.txt", "content": "done"}],
+            "command_plan": [],
+            "experiment_plan": [],
+            "citations": [],
+            "next_action": "continue",
+            "provider": "test",
+            "model": "fake-model",
+        },
+    ]
+    monkeypatch.setattr(loop.agent_runtime, "generate_task", lambda **kwargs: responses.pop(0))
+    class _Ledger:
+        def get_pareto_frontier(self):
+            return []
+
+    result = loop._default_executor(
+        project_dir=project_dir,
+        run_n=1,
+        config=ProjectConfig(
+            research_question="Plan then execute",
+            domain="general",
+            compute_budget="local_cpu",
+            time_budget_hours=1,
+            domain_knowledge_model="none",
+            output_dir=str(tmp_path / "projects"),
+            success_criteria=["Produce a real artifact"],
+            oracle_hints=[],
+        ),
+        task_node=TaskNode(
+            task_id="task",
+            description="Plan then execute",
+            acceptance_criteria=[],
+            oracle_checks=[],
+            estimated_compute_budget="local_cpu",
+            requires_ml_optimizer=False,
+            task_kind="analyze",
+            expected_artifacts=["final.txt"],
+            execution_mode="command_execution",
+        ),
+        instruction="Initial instruction",
+        optimizer=None,
+        ledger=_Ledger(),
+        ideation=None,
+        oracle_resolver=None,
+        failed_iterations=0,
+        taste_model=None,
+    )
+    payload = result["result"]
+    assert payload["classification"] == "success"
+    assert any(path.endswith("final.txt") for path in payload["generated_artifacts"])
+
+
+def test_stage_success_requires_real_outputs():
+    loop = MetaHarnessLoop(projects_root=Path("/tmp") / "projects", taste_root=Path("/tmp") / "taste")
+    assert not loop._stage_success("survey", {"classification": "plan_materialized", "generated_artifacts": ["plan.md"], "task_kind": "survey"})
+    assert loop._stage_success("execute", {"classification": "success", "generated_artifacts": ["final.txt"], "task_kind": "analyze"})
+
+
+def test_promote_workspace_outputs_skips_pyc_and_copies_binary_safe(tmp_path):
+    loop = MetaHarnessLoop(
+        projects_root=tmp_path / "projects",
+        taste_root=tmp_path / "taste_db",
+    )
+    artifact_dir = tmp_path / "run" / "artifacts"
+    workspace = artifact_dir.parent / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "data.bin").write_bytes(b"\xa7\x00\x01")
+    pycache = workspace / "__pycache__"
+    pycache.mkdir()
+    (pycache / "mod.cpython-311.pyc").write_bytes(b"\xa7\x00\x02")
+
+    loop._promote_workspace_outputs(artifact_dir)
+
+    assert (artifact_dir / "data.bin").read_bytes() == b"\xa7\x00\x01"
+    assert not (artifact_dir / "__pycache__" / "mod.cpython-311.pyc").exists()

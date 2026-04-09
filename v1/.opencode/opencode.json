@@ -2,9 +2,9 @@
   "$schema": "https://opencode.ai/config.json",
   "plugin": ["oh-my-openagent"],
   "provider": {
-    "groq": {
+    "groq-1": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Groq",
+      "name": "Groq 1",
       "options": {
         "baseURL": "https://api.groq.com/openai/v1",
         "apiKey": "{env:GROQ_API_KEY}"
@@ -21,9 +21,87 @@
         }
       }
     },
-    "ollama-cloud": {
+    "groq-2": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Ollama Cloud",
+      "name": "Groq 2",
+      "options": {
+        "baseURL": "https://api.groq.com/openai/v1",
+        "apiKey": "{env:GROQ_API_KEY_2}"
+      },
+      "models": {
+        "openai/gpt-oss-120b": {"name": "GPT OSS 120B"},
+        "llama-3.3-70b-versatile": {"name": "Llama 3.3 70B Versatile"},
+        "qwen/qwen3-32b": {"name": "Qwen 3 32B"}
+      }
+    },
+    "groq-3": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Groq 3",
+      "options": {
+        "baseURL": "https://api.groq.com/openai/v1",
+        "apiKey": "{env:GROQ_API_KEY_3}"
+      },
+      "models": {
+        "openai/gpt-oss-120b": {"name": "GPT OSS 120B"},
+        "llama-3.3-70b-versatile": {"name": "Llama 3.3 70B Versatile"},
+        "qwen/qwen3-32b": {"name": "Qwen 3 32B"}
+      }
+    },
+    "groq-4": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Groq 4",
+      "options": {
+        "baseURL": "https://api.groq.com/openai/v1",
+        "apiKey": "{env:GROQ_API_KEY_4}"
+      },
+      "models": {
+        "openai/gpt-oss-120b": {"name": "GPT OSS 120B"},
+        "llama-3.3-70b-versatile": {"name": "Llama 3.3 70B Versatile"},
+        "qwen/qwen3-32b": {"name": "Qwen 3 32B"}
+      }
+    },
+    "groq-5": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Groq 5",
+      "options": {
+        "baseURL": "https://api.groq.com/openai/v1",
+        "apiKey": "{env:GROQ_API_KEY_5}"
+      },
+      "models": {
+        "openai/gpt-oss-120b": {"name": "GPT OSS 120B"},
+        "llama-3.3-70b-versatile": {"name": "Llama 3.3 70B Versatile"},
+        "qwen/qwen3-32b": {"name": "Qwen 3 32B"}
+      }
+    },
+    "groq-6": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Groq 6",
+      "options": {
+        "baseURL": "https://api.groq.com/openai/v1",
+        "apiKey": "{env:GROQ_API_KEY_6}"
+      },
+      "models": {
+        "openai/gpt-oss-120b": {"name": "GPT OSS 120B"},
+        "llama-3.3-70b-versatile": {"name": "Llama 3.3 70B Versatile"},
+        "qwen/qwen3-32b": {"name": "Qwen 3 32B"}
+      }
+    },
+    "groq-7": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Groq 7",
+      "options": {
+        "baseURL": "https://api.groq.com/openai/v1",
+        "apiKey": "{env:GROQ_API_KEY_7}"
+      },
+      "models": {
+        "openai/gpt-oss-120b": {"name": "GPT OSS 120B"},
+        "llama-3.3-70b-versatile": {"name": "Llama 3.3 70B Versatile"},
+        "qwen/qwen3-32b": {"name": "Qwen 3 32B"}
+      }
+    },
+    "ollama-cloud-1": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama Cloud 1",
       "options": {
         "baseURL": "https://ollama.com/v1",
         "apiKey": "{env:OLLAMA_API_KEY}"
@@ -33,6 +111,69 @@
           "name": "GLM 5 Cloud"
         }
       }
+    },
+    "ollama-cloud-2": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama Cloud 2",
+      "options": {
+        "baseURL": "https://ollama.com/v1",
+        "apiKey": "{env:OLLAMA_API_KEY_2}"
+      },
+      "models": {"glm-5:cloud": {"name": "GLM 5 Cloud"}}
+    },
+    "ollama-cloud-3": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama Cloud 3",
+      "options": {
+        "baseURL": "https://ollama.com/v1",
+        "apiKey": "{env:OLLAMA_API_KEY_3}"
+      },
+      "models": {"glm-5:cloud": {"name": "GLM 5 Cloud"}}
+    },
+    "ollama-cloud-4": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama Cloud 4",
+      "options": {
+        "baseURL": "https://ollama.com/v1",
+        "apiKey": "{env:OLLAMA_API_KEY_4}"
+      },
+      "models": {"glm-5:cloud": {"name": "GLM 5 Cloud"}}
+    },
+    "ollama-cloud-5": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama Cloud 5",
+      "options": {
+        "baseURL": "https://ollama.com/v1",
+        "apiKey": "{env:OLLAMA_API_KEY_5}"
+      },
+      "models": {"glm-5:cloud": {"name": "GLM 5 Cloud"}}
+    },
+    "ollama-cloud-6": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama Cloud 6",
+      "options": {
+        "baseURL": "https://ollama.com/v1",
+        "apiKey": "{env:OLLAMA_API_KEY_6}"
+      },
+      "models": {"glm-5:cloud": {"name": "GLM 5 Cloud"}}
+    },
+    "ollama-cloud-7": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama Cloud 7",
+      "options": {
+        "baseURL": "https://ollama.com/v1",
+        "apiKey": "{env:OLLAMA_API_KEY_7}"
+      },
+      "models": {"glm-5:cloud": {"name": "GLM 5 Cloud"}}
+    },
+    "ollama-cloud-8": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama Cloud 8",
+      "options": {
+        "baseURL": "https://ollama.com/v1",
+        "apiKey": "{env:OLLAMA_API_KEY_8}"
+      },
+      "models": {"glm-5:cloud": {"name": "GLM 5 Cloud"}}
     },
     "ollama-local": {
       "npm": "@ai-sdk/openai-compatible",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -41,6 +42,8 @@ class MetaHarnessLoop:
     ADVERSARIAL_ITERATION_LIMIT = 3
     ESCALATION_RETRY_LIMIT = 2
     REPEATED_FAILURE_LIMIT = 3
+    SCHEMA_REPAIR_LIMIT = 2
+    EXECUTION_FOLLOWUP_LIMIT = 1
     STAGE_SEQUENCE = ["survey", "oracle", "execute", "verify", "paper"]
 
     def __init__(
@@ -164,7 +167,7 @@ class MetaHarnessLoop:
                 if intervention.get("type") == "REJECT":
                     failed_iterations += 1
                 self.filesystem.clear_human_intervention(project_id)
-            task_states = self._refresh_task_states(task_states, decomposition)
+            task_states = self._refresh_task_states(project_dir, task_states, decomposition)
             task_node = self._select_next_task(decomposition, task_states)
             if task_node is None:
                 result_summary = "all task DAG nodes completed"
@@ -215,6 +218,10 @@ class MetaHarnessLoop:
                 current_task_context=current_task_context,
                 budget_allocations=budget_allocations,
                 requested_modules=requested_modules,
+                mode="initial_task_prompt",
+                workspace_root=str(self.filesystem.get_run_dir(project_id, run_n) / "workspace"),
+                expected_artifacts=list(getattr(task_node, "expected_artifacts", []) or []),
+                task_kind=str(getattr(task_node, "task_kind", current_stage)),
             )
             self.filesystem.write_instruction(project_id, run_n, instruction)
             run_dir = self.filesystem.get_run_dir(project_id, run_n)
@@ -262,8 +269,8 @@ class MetaHarnessLoop:
                 verification = {"passed": bool(oracle_validation.get("passed")), "checks": [oracle_validation]}
                 report = self._run_adversarial_check(
                     result_payload,
-                    criteria,
-                    task_context=self._adversarial_task_context(task_node, current_stage),
+                    list(getattr(task_node, "acceptance_criteria", []) or criteria),
+                    task_context=self._adversarial_task_context(task_node, current_stage, project_dir),
                     verification=verification,
                     oracle_result=oracle_validation,
                 )
@@ -334,11 +341,13 @@ class MetaHarnessLoop:
                     Path(latest_execute_result["artifact_dir"]),
                     project_id,
                     oracle_path=oracle_path if oracle_path.exists() else None,
+                    task_kind=str(getattr(task_node, "task_kind", current_stage)),
+                    expected_artifacts=list(getattr(task_node, "expected_artifacts", []) or []),
                 )
                 report = self._run_adversarial_check(
                     latest_execute_result,
-                    criteria,
-                    task_context=self._adversarial_task_context(task_node, current_stage),
+                    list(getattr(task_node, "acceptance_criteria", []) or criteria),
+                    task_context=self._adversarial_task_context(task_node, current_stage, project_dir),
                     verification=verification,
                     oracle_result=self.verification.oracle_validator.validate_with_synthetic_data(oracle_path) if oracle_path.exists() else None,
                 )
@@ -489,8 +498,8 @@ class MetaHarnessLoop:
                 verification = {"passed": True, "checks": []}
                 report = self._run_adversarial_check(
                     result_payload,
-                    criteria,
-                    task_context=self._adversarial_task_context(task_node, current_stage),
+                    list(getattr(task_node, "acceptance_criteria", []) or criteria),
+                    task_context=self._adversarial_task_context(task_node, current_stage, project_dir),
                     verification=verification,
                     oracle_result=None,
                 )
@@ -533,6 +542,7 @@ class MetaHarnessLoop:
                     run_n=run_n,
                     config=config,
                     task_node=task_node,
+                    instruction=instruction,
                     optimizer=optimizer,
                     ledger=ledger,
                     ideation=ideation,
@@ -570,11 +580,13 @@ class MetaHarnessLoop:
                 Path(execution["result"]["artifact_dir"]),
                 project_id,
                 oracle_path=oracle_path if oracle_path.exists() and current_stage == "execute" else None,
+                task_kind=str(getattr(task_node, "task_kind", current_stage)),
+                expected_artifacts=list(getattr(task_node, "expected_artifacts", []) or []),
             )
             report = self._run_adversarial_check(
                 execution["result"],
-                criteria,
-                task_context=self._adversarial_task_context(task_node, current_stage),
+                list(getattr(task_node, "acceptance_criteria", []) or criteria),
+                task_context=self._adversarial_task_context(task_node, current_stage, project_dir),
                 verification=verification,
                 oracle_result=None,
             )
@@ -582,7 +594,9 @@ class MetaHarnessLoop:
             self.filesystem.write_json(run_dir / "verification_report.json", verification)
             latest_execute_result = execution["result"] if current_stage == "execute" else latest_execute_result
             execution["result"]["adversarial_critical_blockers"] = report.critical_blockers
-            if self._stage_success(current_stage, execution["result"]) and not report.critical_blockers:
+            execution["result"]["verification_passed"] = bool(verification.get("passed", False))
+            execution["result"]["task_kind"] = getattr(task_node, "task_kind", current_stage)
+            if self._stage_success(current_stage, execution["result"]) and verification["passed"] and not report.critical_blockers:
                 failed_iterations = 0
                 redirect_message = ""
                 self._mark_task_state(
@@ -592,6 +606,12 @@ class MetaHarnessLoop:
                     run_n=run_n,
                     stage=current_stage,
                     blockers=[],
+                    verification_passed=True,
+                    adversarial_passed=True,
+                    attempt_phase=str(execution["result"].get("attempt_phase", "")),
+                    repair_count=int(execution["result"].get("repair_count", 0)),
+                    schema_blockers=list(execution["result"].get("schema_blockers", [])),
+                    block_reason="",
                 )
                 result_summary = f"{execution['result'].get('stage', current_stage)} stage complete"
             else:
@@ -599,6 +619,10 @@ class MetaHarnessLoop:
                 repeated_failure_counts = self._update_repeated_failures(repeated_failure_counts, execution["result"])
                 if report.critical_blockers:
                     redirect_message = self._format_adversarial_blockers(report.critical_blockers)
+                elif execution["result"].get("classification") == "plan_materialized":
+                    redirect_message = "Execute the existing plan now and produce substantive artifacts for this same task."
+                elif execution["result"].get("classification") == "repairable_schema_mismatch":
+                    redirect_message = "Repair the schema mismatch and reissue corrected executable JSON for the same task."
                 self._mark_task_state(
                     task_states,
                     task_node.task_id,
@@ -606,6 +630,12 @@ class MetaHarnessLoop:
                     run_n=run_n,
                     stage=current_stage,
                     blockers=report.critical_blockers or [execution["result"].get("classification", "task_failed")],
+                    verification_passed=bool(verification.get("passed", False)),
+                    adversarial_passed=not bool(report.critical_blockers),
+                    attempt_phase=str(execution["result"].get("attempt_phase", "")),
+                    repair_count=int(execution["result"].get("repair_count", 0)),
+                    schema_blockers=list(execution["result"].get("schema_blockers", [])),
+                    block_reason=str(execution["result"].get("failure_type", execution["result"].get("classification", "blocked"))),
                 )
                 result_summary = "continue iteration"
             self.filesystem.write_project_state(
@@ -700,6 +730,7 @@ class MetaHarnessLoop:
         run_n: int,
         config: ProjectConfig,
         task_node: Any,
+        instruction: str,
         optimizer: ParallelExperimentManager,
         ledger: ExperimentLedger,
         ideation: IdeationOrchestrator,
@@ -708,71 +739,191 @@ class MetaHarnessLoop:
         taste_model: Optional[TasteGP] = None,
     ) -> dict[str, Any]:
         active_task = task_node.description if task_node else config.research_question
-        artifact_dir = project_dir / "outputs" / "code" / f"run_{run_n}"
+        run_dir = self.filesystem.get_run_dir(project_dir.name, run_n)
+        artifact_dir = run_dir / "artifacts"
         artifact_dir.mkdir(parents=True, exist_ok=True)
+        workspace_root = self._workspace_root(artifact_dir)
+        workspace_root.mkdir(parents=True, exist_ok=True)
         summary_parts = [f"Run {run_n} investigates {active_task}."]
-        try:
-            agent_result = self.agent_runtime.generate_task(
-                category="sisyphus",
-                instruction=f"Execute research task: {active_task}",
-                context={
-                    "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
-                    "research_question": config.research_question,
-                    "domain": config.domain,
-                    "success_criteria": config.success_criteria,
-                    "failed_iterations": failed_iterations,
-                    **self._execution_context(project_dir, run_n),
-                },
-                budget={"max_runs": 1, "compute_budget": config.compute_budget},
-            )
-        except ProviderRuntimeError as exc:
-            if exc.error_class == "non_actionable_plan":
-                return {
-                    "trace": {
-                        "instruction_used": run_n,
-                        "task": active_task,
-                        "failed_iterations": failed_iterations,
-                        "provider": None,
-                        "model": None,
-                        "attempted_models": [],
-                        "fallback_used": False,
-                    },
-                    "result": {
-                        "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
-                        "summary": " ".join(summary_parts).strip(),
-                        "primary_metric": 0.0,
-                        "code_path": "",
-                        "errors": [],
-                        "artifact_dir": str(artifact_dir),
-                        "generated_artifacts": [],
-                        "executed_commands": [],
-                        "command_results": [],
-                        "classification": "non_actionable_plan",
-                        "failure_type": exc.error_class,
-                        "failure_summary": str(exc),
-                        "failed_command": "",
-                        "failure_signature": exc.error_class,
-                        "debug_focus": self._debug_focus(project_dir, run_n + 1),
-                        "citations": [],
-                        "agent_runtime": {
-                            "provider": None,
-                            "model": None,
-                            "primary_model": None,
-                            "attempted_models": [],
-                            "fallback_used": False,
-                            "next_action": "continue",
+        base_context = {
+            "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
+            "task_kind": getattr(task_node, "task_kind", self._stage_for_task(task_node)),
+            "execution_mode": getattr(task_node, "execution_mode", "artifact_generation"),
+            "expected_artifacts": list(getattr(task_node, "expected_artifacts", []) or []),
+            "workspace_root": str(workspace_root),
+            "artifacts_root": str(artifact_dir),
+            "research_question": config.research_question,
+            "domain": config.domain,
+            "success_criteria": config.success_criteria,
+            "failed_iterations": failed_iterations,
+            **self._execution_context(project_dir, run_n),
+        }
+        attempt_phase = "plan_only"
+        repair_count = 0
+        schema_blockers: list[str] = []
+        agent_result: dict[str, Any] | None = None
+        execution_followups = 0
+        prompt = instruction
+
+        while True:
+            try:
+                attempt_phase = "executing"
+                agent_result = self.agent_runtime.generate_task(
+                    category="sisyphus",
+                    instruction=prompt,
+                    context=base_context | {"attempt_phase": attempt_phase, "schema_blockers": schema_blockers},
+                    budget={"max_runs": 1, "compute_budget": config.compute_budget},
+                )
+            except ProviderRuntimeError as exc:
+                if self._is_repairable_schema_error(exc.error_class) and repair_count < self.SCHEMA_REPAIR_LIMIT:
+                    repair_count += 1
+                    attempt_phase = "repair_requested"
+                    schema_blockers = [self._schema_blocker_from_error(exc)]
+                    prompt = self.composer.compose(
+                        config=config,
+                        belief_summary=f"tracked_experiments={len(ledger.get_pareto_frontier())}",
+                        retrieved_history=self.history_reader.summarize_experiment_history(project_dir.name),
+                        domain_context="",
+                        current_task_context=self._task_context(
+                            config=config,
+                            run_n=run_n,
+                            failed_iterations=failed_iterations,
+                            redirect_message="Repair the command/artifact schema mismatch for this same task.",
+                            current_stage=self._stage_for_task(task_node),
+                        ),
+                        budget_allocations={"retrieved_history": 4000},
+                        requested_modules=["executor", "verification"],
+                        mode="repair_prompt",
+                        workspace_root=str(workspace_root),
+                        expected_artifacts=list(getattr(task_node, "expected_artifacts", []) or []),
+                        schema_blockers=schema_blockers,
+                        task_kind=str(getattr(task_node, "task_kind", self._stage_for_task(task_node))),
+                    )
+                    continue
+                if exc.error_class == "non_actionable_plan":
+                    return self._executor_result_wrapper(
+                        active_task=active_task,
+                        failed_iterations=failed_iterations,
+                        run_n=run_n,
+                        task_node=task_node,
+                        summary_parts=summary_parts,
+                        artifact_dir=artifact_dir,
+                        result={
+                            "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
+                            "summary": " ".join(summary_parts).strip(),
+                            "primary_metric": 0.0,
+                            "code_path": "",
+                            "errors": [],
+                            "artifact_dir": str(artifact_dir),
+                            "generated_artifacts": [],
+                            "executed_commands": [],
+                            "command_results": [],
+                            "classification": "non_actionable_plan",
+                            "failure_type": exc.error_class,
+                            "failure_summary": str(exc),
+                            "failed_command": "",
+                            "failure_signature": exc.error_class,
+                            "debug_focus": self._debug_focus(project_dir, run_n + 1),
+                            "citations": [],
+                            "agent_runtime": {
+                                "provider": None,
+                                "model": None,
+                                "primary_model": None,
+                                "attempted_models": [],
+                                "fallback_used": False,
+                                "next_action": "continue",
+                            },
+                            "attempt_phase": attempt_phase,
+                            "repair_count": repair_count,
+                            "schema_blockers": schema_blockers,
+                            "resolved_workspace": str(workspace_root),
+                            "status": "discard",
                         },
-                    },
-                }
-            raise
-        generic_result = self._execute_agent_work(
-            project_dir=project_dir,
-            run_n=run_n,
-            task_node=task_node,
-            summary_parts=summary_parts,
-            agent_result=agent_result,
-            artifact_dir=artifact_dir,
-        )
+                    )
+                raise
+
+            if str(agent_result.get("validation_mode", "")) == "relaxed_plan_only":
+                plan_payload = self._materialize_relaxed_plan_payload(
+                    project_dir=project_dir,
+                    artifact_dir=artifact_dir,
+                    task_node=task_node,
+                    run_n=run_n,
+                    summary_parts=summary_parts,
+                    agent_result=agent_result,
+                    attempt_phase="plan_only",
+                    repair_count=repair_count,
+                    resolved_workspace=str(workspace_root),
+                )
+                if execution_followups < self.EXECUTION_FOLLOWUP_LIMIT:
+                    execution_followups += 1
+                    prompt = self.composer.compose(
+                        config=config,
+                        belief_summary=f"tracked_experiments={len(ledger.get_pareto_frontier())}",
+                        retrieved_history=self.history_reader.summarize_experiment_history(project_dir.name),
+                        domain_context="",
+                        current_task_context=self._task_context(
+                            config=config,
+                            run_n=run_n,
+                            failed_iterations=failed_iterations,
+                            redirect_message="The plan exists. Execute it now and materialize real helper files and final artifacts.",
+                            current_stage=self._stage_for_task(task_node),
+                        ),
+                        budget_allocations={"retrieved_history": 4000},
+                        requested_modules=["executor", "verification"],
+                        mode="execution_followup_prompt",
+                        workspace_root=str(workspace_root),
+                        expected_artifacts=list(getattr(task_node, "expected_artifacts", []) or []),
+                        task_kind=str(getattr(task_node, "task_kind", self._stage_for_task(task_node))),
+                    )
+                    continue
+                return self._executor_result_wrapper(
+                    active_task=active_task,
+                    failed_iterations=failed_iterations,
+                    run_n=run_n,
+                    task_node=task_node,
+                    summary_parts=summary_parts,
+                    artifact_dir=artifact_dir,
+                    result=plan_payload,
+                )
+
+            generic_result = self._execute_agent_work(
+                project_dir=project_dir,
+                run_n=run_n,
+                task_node=task_node,
+                summary_parts=summary_parts,
+                agent_result=agent_result,
+                artifact_dir=artifact_dir,
+                attempt_phase=attempt_phase,
+                repair_count=repair_count,
+            )
+            if generic_result is not None and self._is_repairable_schema_failure(generic_result) and repair_count < self.SCHEMA_REPAIR_LIMIT:
+                repair_count += 1
+                attempt_phase = "repair_requested"
+                schema_blockers = [self._schema_blocker_from_result(generic_result)]
+                prompt = self.composer.compose(
+                    config=config,
+                    belief_summary=f"tracked_experiments={len(ledger.get_pareto_frontier())}",
+                    retrieved_history=self.history_reader.summarize_experiment_history(project_dir.name),
+                    domain_context="",
+                    current_task_context=self._task_context(
+                        config=config,
+                        run_n=run_n,
+                        failed_iterations=failed_iterations,
+                        redirect_message="Repair the command/artifact schema mismatch for this same task.",
+                        current_stage=self._stage_for_task(task_node),
+                    ),
+                    budget_allocations={"retrieved_history": 4000},
+                    requested_modules=["executor", "verification"],
+                    mode="repair_prompt",
+                    workspace_root=str(workspace_root),
+                    expected_artifacts=list(getattr(task_node, "expected_artifacts", []) or []),
+                    schema_blockers=schema_blockers,
+                    task_kind=str(getattr(task_node, "task_kind", self._stage_for_task(task_node))),
+                )
+                continue
+            break
+
+        assert agent_result is not None
         if generic_result is not None:
             artifact_payload = generic_result
         elif self._should_use_optimizer(task_node=task_node, config=config, agent_result=agent_result):
@@ -847,7 +998,7 @@ class MetaHarnessLoop:
                 "primary_metric": best.primary_metric,
                 "code_path": best.artifact_path,
                 "errors": [],
-                "artifact_dir": str(Path(best.artifact_path).parent),
+                "artifact_dir": str(artifact_dir),
                 "selected_experiment": best.to_dict(),
                 "classification": "success",
                 "failure_type": "",
@@ -864,16 +1015,49 @@ class MetaHarnessLoop:
                     "fallback_used": agent_result.get("fallback_used", False),
                     "next_action": agent_result.get("next_action"),
                 },
+                "attempt_phase": "executed_substantively",
+                "repair_count": repair_count,
+                "schema_blockers": schema_blockers,
+                "resolved_workspace": str(workspace_root),
+                "artifact_records": [],
+                "generated_artifacts": [best.artifact_path],
+                "executed_commands": [],
+                "command_results": [],
+                "status": "keep",
             }
-        elif str(agent_result.get("validation_mode", "")) == "relaxed_plan_only":
-            artifact_payload = self._materialize_relaxed_plan_payload(
-                project_dir=project_dir,
-                artifact_dir=artifact_dir,
-                task_node=task_node,
-                run_n=run_n,
-                summary_parts=summary_parts,
-                agent_result=agent_result,
-            )
+        elif self._has_artifact_attempt(agent_result):
+            artifact_payload = {
+                "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
+                "summary": " ".join(summary_parts + [agent_result.get("summary", "")]).strip(),
+                "primary_metric": 0.0,
+                "code_path": "",
+                "errors": [],
+                "artifact_dir": str(artifact_dir),
+                "generated_artifacts": [],
+                "artifact_records": self._substantive_files(artifact_dir),
+                "executed_commands": [],
+                "command_results": [],
+                "classification": "non_substantive_completion",
+                "failure_type": "non_substantive_completion",
+                "failure_summary": "artifact plan produced only empty or whitespace-only files",
+                "failed_command": "",
+                "failure_signature": "non_substantive_completion",
+                "debug_focus": self._debug_focus(project_dir, run_n + 1),
+                "citations": agent_result.get("citations", []),
+                "agent_runtime": {
+                    "provider": agent_result.get("provider"),
+                    "model": agent_result.get("model"),
+                    "primary_model": agent_result.get("primary_model"),
+                    "attempted_models": agent_result.get("attempted_models", []),
+                    "fallback_used": agent_result.get("fallback_used", False),
+                    "next_action": agent_result.get("next_action"),
+                },
+                "attempt_phase": "blocked",
+                "repair_count": repair_count,
+                "schema_blockers": schema_blockers,
+                "resolved_workspace": str(workspace_root),
+                "status": "discard",
+            }
         else:
             failure_type = "non_actionable_plan"
             failure_summary = "model returned no files, commands, or usable experiment plan"
@@ -905,20 +1089,25 @@ class MetaHarnessLoop:
                     "fallback_used": agent_result.get("fallback_used", False),
                     "next_action": agent_result.get("next_action"),
                 },
+                "attempt_phase": "blocked",
+                "repair_count": repair_count,
+                "schema_blockers": schema_blockers,
+                "resolved_workspace": str(workspace_root),
+                "status": "discard",
             }
-        return {
-            "trace": {
-                "instruction_used": run_n,
-                "task": active_task,
-                "failed_iterations": failed_iterations,
-                "provider": agent_result.get("provider"),
-                "model": agent_result.get("model"),
-                "attempted_models": agent_result.get("attempted_models", []),
-                "fallback_used": agent_result.get("fallback_used", False),
-                "debug_focus": self._debug_focus(project_dir, run_n),
-            },
-            "result": artifact_payload,
-        }
+        return self._executor_result_wrapper(
+            active_task=active_task,
+            failed_iterations=failed_iterations,
+            run_n=run_n,
+            task_node=task_node,
+            summary_parts=summary_parts,
+            artifact_dir=artifact_dir,
+            result=artifact_payload,
+            provider=agent_result.get("provider"),
+            model=agent_result.get("model"),
+            attempted_models=agent_result.get("attempted_models", []),
+            fallback_used=agent_result.get("fallback_used", False),
+        )
 
     def _materialize_relaxed_plan_payload(
         self,
@@ -929,6 +1118,9 @@ class MetaHarnessLoop:
         run_n: int,
         summary_parts: list[str],
         agent_result: dict[str, Any],
+        attempt_phase: str = "plan_only",
+        repair_count: int = 0,
+        resolved_workspace: str = "",
     ) -> dict[str, Any]:
         plan_path = artifact_dir / "execution_plan.md"
         extra = {
@@ -976,6 +1168,16 @@ class MetaHarnessLoop:
             "errors": [],
             "artifact_dir": str(artifact_dir),
             "generated_artifacts": [str(plan_path)],
+            "artifact_records": [
+                {
+                    "path": str(plan_path),
+                    "role": "final_artifact",
+                    "produced_by": "plan_materialization",
+                    "size_bytes": plan_path.stat().st_size,
+                    "type": "md",
+                    "substantive": plan_path.stat().st_size > 0,
+                }
+            ],
             "executed_commands": [],
             "command_results": [],
             "classification": "plan_materialized",
@@ -994,8 +1196,57 @@ class MetaHarnessLoop:
                 "next_action": agent_result.get("next_action"),
                 "validation_mode": agent_result.get("validation_mode"),
             },
-            "status": "keep",
+            "attempt_phase": attempt_phase,
+            "repair_count": repair_count,
+            "schema_blockers": [],
+            "resolved_workspace": resolved_workspace or str(self._workspace_root(artifact_dir)),
+            "status": "discard",
         }
+
+    def _executor_result_wrapper(
+        self,
+        *,
+        active_task: str,
+        failed_iterations: int,
+        run_n: int,
+        task_node: Any,
+        summary_parts: list[str],
+        artifact_dir: Path,
+        result: dict[str, Any],
+        provider: Any = None,
+        model: Any = None,
+        attempted_models: list[Any] | None = None,
+        fallback_used: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "trace": {
+                "instruction_used": run_n,
+                "task": active_task,
+                "failed_iterations": failed_iterations,
+                "provider": provider,
+                "model": model,
+                "attempted_models": attempted_models or [],
+                "fallback_used": fallback_used,
+                "debug_focus": self._debug_focus(artifact_dir.parents[2], run_n),
+            },
+            "result": result,
+        }
+
+    def _is_repairable_schema_error(self, error_class: str) -> bool:
+        return error_class in {"command_plan_missing_artifact", "command_plan_requires_shell_wrapper", "command_plan_invalid"}
+
+    def _is_repairable_schema_failure(self, result: dict[str, Any]) -> bool:
+        return str(result.get("failure_type", "")) in {"command_plan_missing_artifact", "command_plan_requires_shell_wrapper", "command_plan_invalid"}
+
+    def _schema_blocker_from_error(self, exc: ProviderRuntimeError) -> str:
+        return f"{exc.error_class}: {str(exc).split('. First non-empty response', 1)[0][:240]}"
+
+    def _schema_blocker_from_result(self, result: dict[str, Any]) -> str:
+        return f"{result.get('failure_type', 'schema_error')}: {result.get('failure_summary', 'repair the schema mismatch')}"
+
+    def _has_artifact_attempt(self, agent_result: dict[str, Any]) -> bool:
+        artifact_plan = agent_result.get("artifact_plan", [])
+        return isinstance(artifact_plan, list) and any(isinstance(item, dict) and str(item.get("path", "")).strip() for item in artifact_plan)
 
     def _execute_agent_work(
         self,
@@ -1006,6 +1257,8 @@ class MetaHarnessLoop:
         summary_parts: list[str],
         agent_result: dict[str, Any],
         artifact_dir: Path,
+        attempt_phase: str = "executing",
+        repair_count: int = 0,
     ) -> dict[str, Any] | None:
         artifact_files = self._materialize_artifact_plan(artifact_dir, agent_result.get("artifact_plan", []))
         command_results = self._run_command_plan(
@@ -1013,12 +1266,9 @@ class MetaHarnessLoop:
             artifact_dir=artifact_dir,
             command_plan=agent_result.get("command_plan", []),
         )
-        generated_files = sorted(
-            str(path)
-            for path in artifact_dir.rglob("*")
-            if path.is_file() and path.name not in {"result.json", "command_results.json"}
-        )
-        substantive_files = [path for path in generated_files if not path.endswith((".stdout.log", ".stderr.log"))]
+        self._promote_workspace_outputs(artifact_dir)
+        substantive_file_records = self._substantive_files(artifact_dir)
+        substantive_files = [record["path"] for record in substantive_file_records if record["substantive"]]
         if not artifact_files and not command_results and not substantive_files:
             return None
         command_successes = sum(1 for item in command_results if item.get("returncode", 1) == 0)
@@ -1030,9 +1280,13 @@ class MetaHarnessLoop:
         failure_summary = ""
         next_action = str(agent_result.get("next_action", ""))
         if last_failure is not None:
-            classification = "command_failure"
+            classification = "repairable_schema_mismatch" if self._is_repairable_schema_error(str(last_failure.get("failure_type", ""))) else "command_failure"
             failure_type = str(last_failure.get("failure_type", "command_failure"))
             failure_summary = str(last_failure.get("failure_summary", "command failed"))
+        elif not substantive_files and not any(item.get("returncode", 1) == 0 and not self._is_setup_command(str(item.get("command", ""))) for item in command_results):
+            classification = "non_substantive_completion"
+            failure_type = "non_substantive_completion"
+            failure_summary = "run produced no non-empty substantive artifacts or successful task-relevant commands"
         elif self._next_action_requires_verified_work(next_action):
             classification = "invalid_next_action"
             failure_type = "invalid_next_action"
@@ -1040,11 +1294,14 @@ class MetaHarnessLoop:
         primary_metric = round(command_success_ratio if substantive_files else 0.0, 6)
         if command_results:
             (artifact_dir / "command_results.json").write_text(json.dumps(command_results, indent=2), encoding="utf-8")
+        manifest_path = artifact_dir.parent / "artifact_manifest.json"
+        manifest_path.write_text(json.dumps(substantive_file_records, indent=2), encoding="utf-8")
         result_payload = {
             "task_id": getattr(task_node, "task_id", f"run-{run_n}"),
             "summary": " ".join(summary_parts + [agent_result.get("summary", "")]).strip(),
             "primary_metric": primary_metric,
             "generated_artifacts": substantive_files,
+            "artifact_records": substantive_file_records,
             "executed_commands": [item.get("command", "") for item in command_results],
             "command_results": command_results,
             "classification": classification,
@@ -1065,23 +1322,59 @@ class MetaHarnessLoop:
             "artifact_dir": str(artifact_dir),
             "code_path": substantive_files[0] if substantive_files else "",
             "errors": [item.get("stderr_path", "") for item in command_results if item.get("returncode", 0) != 0],
-            "status": "keep" if classification == "success" and substantive_files and command_success_ratio > 0.0 else "discard",
+            "attempt_phase": "executed_substantively" if classification == "success" else attempt_phase,
+            "repair_count": repair_count,
+            "schema_blockers": [failure_summary] if classification == "repairable_schema_mismatch" and failure_summary else [],
+            "resolved_workspace": str(self._workspace_root(artifact_dir)),
+            "artifact_manifest_path": str(manifest_path),
+            "status": "keep" if classification == "success" and (substantive_files or command_success_ratio > 0.0) else "discard",
         }
-        (artifact_dir / "result.json").write_text(json.dumps(result_payload, indent=2), encoding="utf-8")
         return result_payload
+
+    def _substantive_files(self, artifact_dir: Path) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        workspace_root = self._workspace_root(artifact_dir)
+        seen: set[str] = set()
+        for root in (artifact_dir, workspace_root):
+            if not root.exists():
+                continue
+            for path in sorted(root.rglob("*")):
+                if not path.is_file() or path.name in {"result.json", "command_results.json", "artifact_manifest.json"}:
+                    continue
+                signature = str(path.resolve())
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                size_bytes = path.stat().st_size
+                substantive = size_bytes > 0 and not path.name.endswith((".stdout.log", ".stderr.log"))
+                role = "workspace_helper" if workspace_root == path.parent or workspace_root in path.parents else "final_artifact"
+                records.append(
+                    {
+                        "path": str(path),
+                        "size_bytes": size_bytes,
+                        "type": path.suffix.lstrip(".") or "file",
+                        "substantive": substantive if role == "final_artifact" else False,
+                        "role": role,
+                        "produced_by": "artifact_plan",
+                    }
+                )
+        return records
 
     def _materialize_artifact_plan(self, artifact_dir: Path, artifact_plan: list[Any]) -> list[str]:
         artifact_files: list[str] = []
+        workspace_root = self._workspace_root(artifact_dir)
+        workspace_root.mkdir(parents=True, exist_ok=True)
         for artifact in artifact_plan:
             if not isinstance(artifact, dict):
                 continue
-            relative_path = str(artifact.get("path", "")).strip()
-            if not relative_path:
+            target_path = self._resolve_artifact_target(artifact_dir, workspace_root, artifact)
+            if target_path is None:
                 continue
-            path = artifact_dir / relative_path
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(str(artifact.get("content", "")), encoding="utf-8")
-            artifact_files.append(str(path))
+            content = str(artifact.get("content", ""))
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(content, encoding="utf-8")
+            if content.strip():
+                artifact_files.append(str(target_path))
         return artifact_files
 
     def _run_command_plan(
@@ -1092,8 +1385,15 @@ class MetaHarnessLoop:
         command_plan: list[Any],
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
+        workspace_root = self._workspace_root(artifact_dir)
+        workspace_root.mkdir(parents=True, exist_ok=True)
         for index, entry in enumerate(command_plan, start=1):
-            parsed = self._parse_command_entry(entry, project_dir=project_dir, artifact_dir=artifact_dir)
+            parsed = self._parse_command_entry(
+                entry,
+                project_dir=project_dir,
+                artifact_dir=artifact_dir,
+                workspace_root=workspace_root,
+            )
             if parsed is None:
                 results.append(
                     {
@@ -1111,6 +1411,22 @@ class MetaHarnessLoop:
                 results.append(parsed)
                 break
             command, cwd, timeout = parsed
+            missing_file = self._missing_workspace_reference(command, cwd, artifact_dir, workspace_root)
+            if missing_file:
+                results.append(
+                    {
+                        "command": " ".join(command),
+                        "cwd": str(cwd),
+                        "returncode": 127,
+                        "stdout_path": "",
+                        "stderr_path": "",
+                        "failure_type": "command_plan_missing_artifact",
+                        "failure_summary": f"referenced workspace file is missing: {missing_file}",
+                        "stderr_excerpt": f"missing workspace file: {missing_file}",
+                        "failure_signature": "command_plan_missing_artifact",
+                    }
+                )
+                break
             stdout_path = artifact_dir / f"command_{index}.stdout.log"
             stderr_path = artifact_dir / f"command_{index}.stderr.log"
             try:
@@ -1180,9 +1496,10 @@ class MetaHarnessLoop:
         *,
         project_dir: Path,
         artifact_dir: Path,
+        workspace_root: Path,
     ) -> tuple[list[str], Path, int] | dict[str, Any] | None:
         if isinstance(entry, str) and entry.strip():
-            return shlex.split(entry), artifact_dir, 300
+            return shlex.split(entry), workspace_root, 300
         if not isinstance(entry, dict):
             return None
         command_value = entry.get("command")
@@ -1195,8 +1512,15 @@ class MetaHarnessLoop:
         cwd_value = str(entry.get("cwd", ".")).strip() or "."
         cwd = Path(cwd_value)
         if not cwd.is_absolute():
-            base = project_dir if cwd_value.startswith("project:") else artifact_dir
-            relative = cwd_value.removeprefix("project:")
+            if cwd_value.startswith("project:"):
+                base = project_dir
+                relative = cwd_value.removeprefix("project:")
+            elif cwd_value.startswith("workspace:"):
+                base = workspace_root
+                relative = cwd_value.removeprefix("workspace:")
+            else:
+                base = workspace_root
+                relative = cwd_value
             cwd = (base / relative).resolve()
         timeout = int(entry.get("timeout_seconds", 300))
         if not command:
@@ -1210,6 +1534,91 @@ class MetaHarnessLoop:
                 "failure_summary": "empty command entry",
             }
         return command, cwd, timeout
+
+    def _workspace_root(self, artifact_dir: Path) -> Path:
+        return artifact_dir.parent / "workspace"
+
+    def _resolve_artifact_target(self, artifact_dir: Path, workspace_root: Path, artifact: dict[str, Any]) -> Path | None:
+        relative_path = str(artifact.get("path", "")).strip()
+        if not relative_path:
+            return None
+        path = Path(relative_path)
+        if path.is_absolute():
+            try:
+                path = path.relative_to(path.anchor)
+            except Exception:
+                path = Path(path.name)
+        normalized = str(path).replace("\\", "/")
+        if normalized.startswith("project:"):
+            normalized = normalized.removeprefix("project:")
+        path = self._normalize_artifact_relative_path(Path(normalized))
+        explicit_role = str(artifact.get("role", "")).strip()
+        target_root = workspace_root if explicit_role in {"workspace_helper", "helper"} else artifact_dir
+        if not explicit_role and path.suffix in {".py", ".sh", ".ipynb", ".R", ".jl"}:
+            target_root = workspace_root
+        return (target_root / path).resolve()
+
+    def _normalize_artifact_relative_path(self, path: Path) -> Path:
+        parts = [part for part in path.parts if part not in {"", "."}]
+        while parts and parts[0] in {"workspace", "artifacts"}:
+            parts = parts[1:]
+        if "outputs" in parts:
+            outputs_index = parts.index("outputs")
+            parts = parts[outputs_index + 1 :]
+            while parts and parts[0] in {"code", "paper", "workspace", "artifacts"}:
+                parts = parts[1:]
+        if not parts:
+            return Path(path.name or "artifact")
+        return Path(*parts)
+
+    def _promote_workspace_outputs(self, artifact_dir: Path) -> None:
+        workspace_root = self._workspace_root(artifact_dir)
+        if not workspace_root.exists():
+            return
+        helper_suffixes = {".py", ".sh", ".ipynb", ".R", ".jl"}
+        for path in sorted(workspace_root.rglob("*")):
+            if not path.is_file():
+                continue
+            if "__pycache__" in path.parts:
+                continue
+            if path.suffix in helper_suffixes or path.name.endswith((".stdout.log", ".stderr.log")):
+                continue
+            relative = path.relative_to(workspace_root)
+            target = artifact_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+
+    def _missing_workspace_reference(self, command: list[str], cwd: Path, artifact_dir: Path, workspace_root: Path) -> str:
+        referenced = self._workspace_file_reference(command)
+        if not referenced:
+            return ""
+        candidate = Path(referenced)
+        candidates = []
+        if candidate.is_absolute():
+            candidates.append(candidate)
+        else:
+            candidates.extend(
+                [
+                    cwd / candidate,
+                    workspace_root / candidate,
+                    artifact_dir / candidate,
+                ]
+            )
+        for path in candidates:
+            if path.exists():
+                return ""
+        return referenced
+
+    def _workspace_file_reference(self, command: list[str]) -> str:
+        for token in command[1:]:
+            cleaned = token.strip()
+            if not cleaned or cleaned.startswith("-"):
+                continue
+            if "/" in cleaned or "." in Path(cleaned).name:
+                name = Path(cleaned).name
+                if name.endswith((".py", ".sh", ".ipynb", ".R", ".jl", ".md", ".json", ".csv", ".txt")):
+                    return cleaned
+        return ""
 
     def _should_use_optimizer(self, *, task_node: Any, config: ProjectConfig, agent_result: dict[str, Any]) -> bool:
         return bool(
@@ -1286,6 +1695,8 @@ class MetaHarnessLoop:
             "artifact_dir": result.get("artifact_dir"),
             "classification": result.get("classification", ""),
             "failure_type": result.get("failure_type", ""),
+            "attempt_phase": result.get("attempt_phase", ""),
+            "schema_blockers": result.get("schema_blockers", []),
             "adversarial_passed": not bool(result.get("adversarial_critical_blockers", [])),
             "critical_blockers": result.get("adversarial_critical_blockers", []),
         }
@@ -1453,6 +1864,15 @@ class MetaHarnessLoop:
         return self.STAGE_SEQUENCE[min(index + 1, len(self.STAGE_SEQUENCE) - 1)]
 
     def _stage_for_task(self, task_node: Any) -> str:
+        task_kind = str(getattr(task_node, "task_kind", "")).strip().lower()
+        if task_kind == "oracle":
+            return "oracle"
+        if task_kind == "verify":
+            return "verify"
+        if task_kind == "paper":
+            return "paper"
+        if task_kind == "survey":
+            return "survey"
         description = str(getattr(task_node, "description", "")).lower()
         if "oracle" in description:
             return "oracle"
@@ -1482,6 +1902,11 @@ class MetaHarnessLoop:
                     "blockers": list(previous.get("blockers", [])),
                     "verification_passed": bool(previous.get("verification_passed", False)),
                     "adversarial_passed": bool(previous.get("adversarial_passed", False)),
+                    "attempt_phase": str(previous.get("attempt_phase", "plan_only")),
+                    "repair_count": int(previous.get("repair_count", 0)),
+                    "schema_blockers": list(previous.get("schema_blockers", [])),
+                    "block_reason": str(previous.get("block_reason", "")),
+                    "completion_evidence": list(previous.get("completion_evidence", [])),
                 }
             )
         return states
@@ -1492,12 +1917,21 @@ class MetaHarnessLoop:
                 return task_state
         raise KeyError(task_id)
 
-    def _refresh_task_states(self, task_states: list[dict[str, Any]], decomposition: Any) -> list[dict[str, Any]]:
+    def _refresh_task_states(self, project_dir: Path, task_states: list[dict[str, Any]], decomposition: Any) -> list[dict[str, Any]]:
         task_ids = {task.task_id for task in getattr(decomposition, "tasks", []) or []}
         existing = {state["task_id"]: dict(state) for state in task_states if state.get("task_id") in task_ids}
         refreshed = []
         for task in getattr(decomposition, "tasks", []) or []:
-            state = existing.get(task.task_id, {"task_id": task.task_id, "stage": self._stage_for_task(task), "status": "pending", "last_run_n": 0, "blockers": [], "verification_passed": False, "adversarial_passed": False})
+            state = existing.get(task.task_id, {"task_id": task.task_id, "stage": self._stage_for_task(task), "status": "pending", "last_run_n": 0, "blockers": [], "verification_passed": False, "adversarial_passed": False, "attempt_phase": "plan_only", "repair_count": 0, "schema_blockers": [], "block_reason": "", "completion_evidence": []})
+            snapshot = self._task_completion_snapshot(project_dir, task)
+            if snapshot["completed"]:
+                state["status"] = "completed"
+                state["verification_passed"] = True
+                state["adversarial_passed"] = True
+                state["blockers"] = []
+                state["completion_evidence"] = snapshot["evidence"]
+                refreshed.append(state)
+                continue
             if state["status"] not in {"completed", "blocked", "running"}:
                 deps_complete = all(
                     self._task_state_by_id(task_states, dependency)["status"] == "completed"
@@ -1538,6 +1972,11 @@ class MetaHarnessLoop:
         blockers: list[str],
         verification_passed: bool | None = None,
         adversarial_passed: bool | None = None,
+        attempt_phase: str | None = None,
+        repair_count: int | None = None,
+        schema_blockers: list[str] | None = None,
+        block_reason: str | None = None,
+        completion_evidence: list[str] | None = None,
     ) -> None:
         state = self._task_state_by_id(task_states, task_id)
         state["status"] = status
@@ -1548,32 +1987,111 @@ class MetaHarnessLoop:
             state["verification_passed"] = verification_passed
         if adversarial_passed is not None:
             state["adversarial_passed"] = adversarial_passed
+        if attempt_phase is not None:
+            state["attempt_phase"] = attempt_phase
+        if repair_count is not None:
+            state["repair_count"] = repair_count
+        if schema_blockers is not None:
+            state["schema_blockers"] = list(schema_blockers)
+        if block_reason is not None:
+            state["block_reason"] = block_reason
+        if completion_evidence is not None:
+            state["completion_evidence"] = list(completion_evidence)
 
     def _stage_success(self, stage: str, result: dict[str, Any]) -> bool:
         classification = str(result.get("classification", ""))
         generated_artifacts = result.get("generated_artifacts", [])
-        if stage == "survey":
-            return classification in {"success", "plan_materialized"} and bool(generated_artifacts)
-        if stage == "execute":
-            return classification in {"success", "plan_materialized"} and bool(generated_artifacts)
-        return classification in {"success", "plan_materialized"}
+        task_kind = str(result.get("task_kind", stage)).strip().lower()
+        verification_passed = bool(result.get("verification_passed", False))
+        if classification != "success":
+            return False
+        if task_kind == "survey":
+            return bool(generated_artifacts)
+        if task_kind == "oracle":
+            return bool(generated_artifacts)
+        if task_kind in {"execute", "acquire_data", "analyze"}:
+            return bool(generated_artifacts) or any(
+                int(item.get("returncode", 1)) == 0 and not self._is_setup_command(str(item.get("command", "")))
+                for item in result.get("command_results", [])
+                if isinstance(item, dict)
+            )
+        if task_kind == "verify":
+            return verification_passed
+        if task_kind == "paper":
+            return bool(generated_artifacts)
+        return bool(generated_artifacts)
+
+    def _task_completion_snapshot(self, project_dir: Path, task_node: Any) -> dict[str, Any]:
+        expected = set(getattr(task_node, "expected_artifacts", []) or [])
+        if not expected:
+            return {"completed": False, "evidence": []}
+        evidence: list[str] = []
+        for run_dir in sorted((project_dir / "runs").glob("*"), reverse=True):
+            result_path = run_dir / "result.json"
+            verification_path = run_dir / "verification_report.json"
+            if not result_path.exists():
+                continue
+            payload = self.filesystem.read_json(result_path)
+            if str(payload.get("task_id", "")) != str(getattr(task_node, "task_id", "")):
+                continue
+            if str(payload.get("classification", "")) != "success":
+                continue
+            artifact_records = payload.get("artifact_records", [])
+            present = {
+                Path(str(item.get("path", ""))).name
+                for item in artifact_records
+                if isinstance(item, dict) and bool(item.get("substantive")) and str(item.get("role", "")) == "final_artifact"
+            }
+            verification_passed = False
+            if verification_path.exists():
+                verification = self.filesystem.read_json(verification_path)
+                verification_passed = bool(verification.get("passed", False))
+            if expected.issubset(present) and verification_passed:
+                evidence = [f"{run_dir.name}:{name}" for name in sorted(expected)]
+                return {"completed": True, "evidence": evidence}
+        return {"completed": False, "evidence": evidence}
 
     def _ideation_required(self, *, failed_iterations: int, current_stage: str) -> bool:
         return failed_iterations >= self.ADVERSARIAL_ITERATION_LIMIT and current_stage in {"survey", "execute", "verify"}
 
-    def _adversarial_task_context(self, task_node: Any, stage: str) -> dict[str, Any]:
+    def _adversarial_task_context(self, task_node: Any, stage: str, project_dir: Path) -> dict[str, Any]:
         return {
             "task_id": getattr(task_node, "task_id", ""),
             "task_description": getattr(task_node, "description", ""),
             "stage": stage,
+            "task_kind": getattr(task_node, "task_kind", stage),
             "success_metric": getattr(task_node, "success_metric", ""),
             "acceptance_criteria": getattr(task_node, "acceptance_criteria", []),
+            "expected_artifacts": getattr(task_node, "expected_artifacts", []),
+            "execution_mode": getattr(task_node, "execution_mode", ""),
+            "prior_results": self._prior_task_evidence(project_dir, getattr(task_node, "task_id", "")),
         }
 
     def _format_adversarial_blockers(self, blockers: list[str]) -> str:
         if not blockers:
             return ""
         return "Address adversarial blockers before advancing: " + "; ".join(blockers[:5])
+
+    def _prior_task_evidence(self, project_dir: Path, task_id: str) -> list[dict[str, Any]]:
+        evidence: list[dict[str, Any]] = []
+        for result_path in sorted((project_dir / "runs").glob("*/result.json")):
+            payload = self.filesystem.read_json(result_path)
+            if str(payload.get("task_id", "")) != str(task_id):
+                continue
+            evidence.append(
+                {
+                    "run": result_path.parent.name,
+                    "classification": payload.get("classification", ""),
+                    "generated_artifacts": payload.get("generated_artifacts", []),
+                    "artifact_records": payload.get("artifact_records", []),
+                    "summary": payload.get("summary", ""),
+                }
+            )
+        return evidence[-3:]
+
+    def _is_setup_command(self, command: str) -> bool:
+        lowered = command.strip().lower()
+        return lowered.startswith("pip install") or lowered.startswith("python -m pip install")
 
     def _latest_stage_result(self, project_dir: Path, stage: str) -> dict[str, Any] | None:
         results: list[dict[str, Any]] = []
